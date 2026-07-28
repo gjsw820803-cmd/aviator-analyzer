@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Crash Data Analyzer & AI (Auto Bet)</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: Arial, sans-serif;
+            background: #0d1117;
+            color: #ffffff;
+            margin: 0;
+            padding: 6px;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            gap: 6px;
+        }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #30363d;
+            padding-bottom: 4px;
+        }
+        header h3 { font-size: 14px; margin: 0; display: flex; align-items: center; gap: 10px; }
+        
+        .bet-status {
+            font-size: 11px;
+            padding: 3px 8px;
+            border-radius: 4px;
+            background: #444c56;
+            color: #c9d1d9;
+            font-weight: bold;
+        }
+        .bet-status.active { background: #d29922; color: #000; animation: pulse 1s infinite; }
+        .bet-status.alert-beep { background: #da3633; color: #fff; animation: pulse 0.5s infinite; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
+
+        .nav-tabs { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+        .tab-btn {
+            background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+            padding: 4px 10px; cursor: pointer; border-radius: 4px; font-size: 11px; font-weight: bold;
+            display: inline-flex; align-items: center; gap: 4px; text-decoration: none;
+        }
+        .tab-btn.active { background: #1f6feb; color: #fff; border-color: #1f6feb; }
+        .tab-btn.upload-btn { background: #238636; color: #fff; border-color: #2ea043; }
+        .tab-btn.export-btn { background: #8957e5; color: #fff; border-color: #8957e5; }
+        .tab-btn.clear-btn { background: #da3633; color: #fff; border-color: #b32d2a; }
+        .tab-btn.sound-btn { background: #444c56; border-color: #768390; color: #fff; }
+        .tab-btn.sound-btn.on { background: #e3b341; border-color: #d29922; color: #000; }
+        
+        /* Sync Button Styles */
+        .tab-btn.sync-btn { background: #444c56; border-color: #768390; color: #fff; }
+        .tab-btn.sync-btn.on { background: #238636; border-color: #2ea043; color: #fff; }
+
+        /* Summary Box */
+        .summary-box {
+            background: #161b22; padding: 4px 8px; border-radius: 4px; font-size: 11px;
+            border: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center;
+        }
+
+        /* Data Window */
+        .data-window {
+            background: #161b22; border: 1px solid #30363d; border-radius: 4px;
+            height: 95px; overflow-y: auto; padding: 4px;
+        }
+        .data-row {
+            display: grid; grid-template-columns: repeat(20, 1fr); gap: 2px;
+            margin-bottom: 2px; font-size: 10px; text-align: center;
+        }
+        .data-cell { padding: 2px 1px; border-radius: 2px; font-weight: bold; }
+        .data-cell.blue { background: rgba(77, 166, 255, 0.15); color: #4da6ff; }
+        .data-cell.purple { background: rgba(199, 125, 255, 0.15); color: #c77dff; }
+        .data-cell.pink { background: rgba(255, 117, 140, 0.15); color: #ff758c; }
+        
+        /* Summary Tables Window */
+        .summary-tables-container {
+            display: flex; gap: 6px; background: #161b22; border: 1px solid #30363d;
+            border-radius: 4px; padding: 4px; max-height: 135px; overflow-y: auto;
+        }
+        table.summary-table {
+            width: 100%; border-collapse: collapse; background: #ffffff; color: #000000;
+            font-size: 10px; border-radius: 3px; overflow: hidden; text-align: center;
+        }
+        table.summary-table th, table.summary-table td { border: 1px solid #d1d5db; padding: 2px 4px; text-align: center; cursor: pointer; }
+        table.summary-table th { background: #e5e7eb; color: #1f2937; font-weight: bold; font-size: 10px; cursor: default; }
+        table.summary-table tr.selected-range { background-color: #dbeafe !important; outline: 1px solid #3b82f6; }
+
+        /* Chart/Rules Window */
+        .chart-container-box {
+            background: #161b22; border: 1px solid #30363d; border-radius: 4px; padding: 6px;
+            flex: 1; position: relative; min-height: 130px; display: flex; flex-direction: column; overflow: hidden;
+        }
+        .chart-view-section { display: none; flex: 1; position: relative; width: 100%; height: 100%; overflow-y: auto; }
+        .chart-view-section.active { display: flex; flex-direction: column; }
+        select.scope-select { background: #21262d; color: #fff; border: 1px solid #30363d; padding: 2px 4px; border-radius: 4px; font-size: 10px; }
+
+        /* Rules Form Styles */
+        .rules-form {
+            display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px;
+            background: #0d1117; padding: 6px; border-radius: 4px; margin-bottom: 6px; border: 1px solid #30363d;
+        }
+        .rules-form label { font-size: 10px; display: block; color: #8b949e; margin-bottom: 2px; }
+        .rules-form input, .rules-form select {
+            width: 100%; background: #21262d; border: 1px solid #30363d; color: #c9d1d9;
+            padding: 3px; border-radius: 3px; font-size: 10px;
+        }
+        .step-box { background: #21262d; padding: 4px; border-radius: 3px; border: 1px solid #30363d; text-align: center; }
+        .add-rule-btn { background: #238636; color: #fff; border: none; padding: 4px; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: bold; width: 100%; height: 100%; }
+        
+        .rules-grid { width: 100%; border-collapse: collapse; font-size: 10px; text-align: center; color: #c9d1d9; }
+        .rules-grid th, .rules-grid td { border: 1px solid #30363d; padding: 3px; }
+        .rules-grid th { background: #21262d; }
+        .del-btn { background: #da3633; color: white; border: none; border-radius: 2px; cursor: pointer; padding: 2px 6px; }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h3>
+            Crash Analyzer & AI
+            <span id="betStatus" class="bet-status">⚪ Standby</span>
+        </h3>
+        <div class="nav-tabs">
+            <button id="syncBtn" class="tab-btn sync-btn on" onclick="toggleSync()">⏸ Sync: ON</button>
+            <button id="soundBtn" class="tab-btn sound-btn" onclick="toggleSound()">🔇 Sound: OFF</button>
+            <button class="tab-btn" onclick="switchChartTab(event, 'rulesView')">⚙️ Rules</button>
+            <button class="tab-btn active" onclick="switchChartTab(event, 'valueChartView')">Value Chart</button>
+            <button class="tab-btn" onclick="switchChartTab(event, 'ratioChartView')">Ratio Chart</button>
+            <label class="tab-btn upload-btn" title="Upload CSV Data">
+                📁 CSV <input type="file" id="csvFileInput" accept=".csv, .txt" style="display: none;" onchange="handleCSVUpload(event)">
+            </label>
+            <button class="tab-btn export-btn" onclick="exportCSV()" title="Export CSV Data">📥 CSV</button>
+            <button class="tab-btn clear-btn" onclick="clearData()" title="Clear All Data">🗑 Clear</button>
+        </div>
+    </header>
+
+    <div class="summary-box">
+        <div>
+            <strong>Summary:</strong> Rolls: <span id="totalRolls">0</span> | <span id="headerAvg">Avg: 0.00</span> | <span id="activeRangeLabel" style="color: #3fb950; font-weight: bold;">(Ratio: >= 2)</span>
+        </div>
+        <div>
+            <select id="scopeSelect" onchange="updateAll()" class="scope-select">
+                <option value="50">Last 50</option>
+                <option value="100">Last 100</option>
+                <option value="200">Last 200</option>
+                <option value="500">Last 500</option>
+                <option value="1000">Last 1000</option>
+                <option value="2000">Last 2000</option>
+                <option value="5000">Last 5000</option>
+                <option value="10000" selected>Last 10000</option>
+            </select>
+        </div>
+    </div>
+    
+    <div class="data-window" id="dataWindow"></div>
+    <div class="summary-tables-container" id="summaryResult"></div>
+
+    <div class="chart-container-box">
+        
+        <!-- Rules View -->
+        <div id="rulesView" class="chart-view-section">
+            <div class="rules-form">
+                <div>
+                    <label>Value Range</label>
+                    <select id="r_range">
+                        <option value="1.2|<">< 1.2</option>
+                        <option value="1.2|>=">>= 1.2</option>
+                        <option value="1.5|>=">>= 1.5</option>
+                        <option value="2|>=" selected>>= 2</option>
+                        <option value="5|>=">>= 5</option>
+                        <option value="10|>=">>= 10</option>
+                        <option value="20|>=">>= 20</option>
+                        <option value="50|>=">>= 50</option>
+                    </select>
+                </div>
+                <div><label>Ratio High (Start)</label><input type="number" id="r_high" value="14.0" step="0.1"></div>
+                <div><label>Ratio Low (Stop)</label><input type="number" id="r_low" value="12.0" step="0.1"></div>
+                <div><label>Auto Cash Out</label><input type="number" id="r_cashout" value="2.00" step="0.01"></div>
+                <div><label>Max Bet Rounds</label><input type="number" id="r_maxrounds" value="5"></div>
+                <div><label>Max Repeat</label><input type="number" id="r_maxrepeat" value="3" min="1" title="Consecutive count limit below range"></div>
+                
+                <div class="step-box"><label>Step 1 Bet (LKR)</label><input type="number" id="r_b1" value="20"></div>
+                <div class="step-box"><label>Step 2 (Bet | Loss Trg)</label><div style="display:flex;gap:2px;"><input type="number" id="r_b2" value="40" placeholder="Amt"><input type="number" id="r_t1" value="3" placeholder="Loss"></div></div>
+                <div class="step-box"><label>Step 3 (Bet | Loss Trg)</label><div style="display:flex;gap:2px;"><input type="number" id="r_b3" value="80" placeholder="Amt"><input type="number" id="r_t2" value="2" placeholder="Loss"></div></div>
+                <div class="step-box"><label>Step 4 (Bet | Loss Trg)</label><div style="display:flex;gap:2px;"><input type="number" id="r_b4" value="160" placeholder="Amt"><input type="number" id="r_t3" value="2" placeholder="Loss"></div></div>
+                <div style="grid-column: span 2;"><button class="add-rule-btn" onclick="addRule()">➕ Add Rule</button></div>
+            </div>
+            <table class="rules-grid" id="rulesTable">
+                <tr><th>Range</th><th>High(Start)</th><th>Low(Stop)</th><th>CashOut</th><th>MaxRnd</th><th>MaxRepeat</th><th>Step1</th><th>Step2</th><th>Step3</th><th>Step4</th><th>Act</th></tr>
+            </table>
+        </div>
+
+        <!-- Value Chart View -->
+        <div id="valueChartView" class="chart-view-section active">
+            <canvas id="trendChart"></canvas>
+        </div>
+        
+        <!-- Ratio Chart View -->
+        <div id="ratioChartView" class="chart-view-section">
+            <canvas id="ratioChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        // --- Core UI & Tabs Logic ---
+        function switchChartTab(evt, viewId) {
+            document.querySelectorAll('.chart-view-section').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                if(!btn.classList.contains('upload-btn') && !btn.classList.contains('export-btn') && !btn.classList.contains('clear-btn') && !btn.classList.contains('sound-btn') && !btn.classList.contains('sync-btn')) {
+                    btn.classList.remove('active');
+                }
+            });
+            document.getElementById(viewId).classList.add('active');
+            evt.currentTarget.classList.add('active');
+            if(viewId === 'valueChartView' || viewId === 'ratioChartView') updateCharts();
+            if(viewId === 'rulesView') renderRules();
+        }
+
+        let globalData = JSON.parse(localStorage.getItem('crashDataList')) || [];
+        
+        // --- Sync Control & Incremental Update Flags ---
+        let isSyncActive = true; 
+        let lastKnownPayload = null;
+        let needsBaseline = true; 
+
+        // --- Betting & Max Repeat Beep Engine Variables ---
+        let bettingRules = JSON.parse(localStorage.getItem('aviator_bet_rules')) || [];
+        let isBettingActive = false;
+        let activeRuleId = null;
+        let betStep = 0; 
+        let lossesInStep = 0;
+        let roundsPlayedSession = 0;
+        
+        let soundEnabled = false;
+        let audioCtx = null;
+        let beepInterval = null;
+        let isMaxRepeatBeeping = false;
+
+        // --- Range Definitions & Exact Probability Target Rounds ---
+        const ranges = [
+            { label: "< 1.2", threshold: 1.2, target: 5.2, type: 'lt' },
+            { label: ">= 1.2", threshold: 1.2, target: 1.2, type: 'ge' },
+            { label: ">= 1.5", threshold: 1.5, target: 1.5, type: 'ge' },
+            { label: ">= 2", threshold: 2, target: 2.1, type: 'ge' },
+            { label: ">= 5", threshold: 5, target: 5.2, type: 'ge' },
+            { label: ">= 10", threshold: 10, target: 10.3, type: 'ge' },
+            { label: ">= 20", threshold: 20, target: 20.6, type: 'ge' },
+            { label: ">= 50", threshold: 50, target: 51.5, type: 'ge' },
+            { label: ">= 100", threshold: 100, target: 103, type: 'ge' },
+            { label: ">= 200", threshold: 200, target: 206, type: 'ge' },
+            { label: ">= 500", threshold: 500, target: 515, type: 'ge' },
+            { label: ">= 1000", threshold: 1000, target: 1031, type: 'ge' }
+        ];
+
+        let selectedRange = ranges[3]; 
+
+        // --- Sync Logic ---
+        function toggleSync() {
+            isSyncActive = !isSyncActive;
+            let btn = document.getElementById('syncBtn');
+            if (isSyncActive) {
+                btn.classList.add('on');
+                btn.innerText = '⏸ Sync: ON';
+                needsBaseline = true; 
+            } else {
+                btn.classList.remove('on');
+                btn.innerText = '▶️ Sync: OFF';
+            }
+        }
+
+        // --- Sound Logic ---
+        function toggleSound() {
+            soundEnabled = !soundEnabled;
+            let btn = document.getElementById('soundBtn');
+            if (soundEnabled) {
+                btn.classList.add('on');
+                btn.innerText = '🔊 Sound: ON';
+                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (isBettingActive || isMaxRepeatBeeping) startBeep();
+            } else {
+                btn.classList.remove('on');
+                btn.innerText = '🔇 Sound: OFF';
+                stopBeep();
+            }
+        }
+        
+        function startBeep() {
+            if (!soundEnabled) return;
+            if (beepInterval) return;
+            beepInterval = setInterval(() => {
+                if (!audioCtx) return;
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.frequency.value = isMaxRepeatBeeping ? 1000 : 800; // Different pitch for max repeat alert
+                gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+                osc.start(audioCtx.currentTime);
+                osc.stop(audioCtx.currentTime + 0.1);
+            }, 800);
+        }
+        function stopBeep() {
+            if (beepInterval && !isBettingActive && !isMaxRepeatBeeping) { 
+                clearInterval(beepInterval); 
+                beepInterval = null; 
+            }
+        }
+
+        // --- Rule Management ---
+        function addRule() {
+            let rVal = document.getElementById('r_range').value.split('|');
+            let rule = {
+                id: Date.now(),
+                label: (rVal[1] === '<' ? '< ' : '>= ') + rVal[0],
+                threshold: parseFloat(rVal[0]),
+                type: rVal[1] === '<' ? 'lt' : 'ge',
+                high: parseFloat(document.getElementById('r_high').value),
+                low: parseFloat(document.getElementById('r_low').value),
+                cashout: parseFloat(document.getElementById('r_cashout').value),
+                maxRounds: parseInt(document.getElementById('r_maxrounds').value),
+                maxRepeat: parseInt(document.getElementById('r_maxrepeat').value) || 3,
+                bets: [
+                    parseFloat(document.getElementById('r_b1').value),
+                    parseFloat(document.getElementById('r_b2').value),
+                    parseFloat(document.getElementById('r_b3').value),
+                    parseFloat(document.getElementById('r_b4').value)
+                ],
+                lossTrigs: [
+                    parseInt(document.getElementById('r_t1').value),
+                    parseInt(document.getElementById('r_t2').value),
+                    parseInt(document.getElementById('r_t3').value)
+                ]
+            };
+            bettingRules.push(rule);
+            localStorage.setItem('aviator_bet_rules', JSON.stringify(bettingRules));
+            renderRules();
+        }
+
+        function deleteRule(id) {
+            bettingRules = bettingRules.filter(r => r.id !== id);
+            localStorage.setItem('aviator_bet_rules', JSON.stringify(bettingRules));
+            renderRules();
+        }
+
+        function renderRules() {
+            let tb = document.getElementById('rulesTable');
+            tb.innerHTML = `<tr><th>Range</th><th>High(Start)</th><th>Low(Stop)</th><th>CashOut</th><th>MaxRnd</th><th>MaxRepeat</th><th>Step1</th><th>Step2</th><th>Step3</th><th>Step4</th><th>Act</th></tr>`;
+            bettingRules.forEach(r => {
+                tb.innerHTML += `<tr>
+                    <td>${r.label}</td><td>${r.high}</td><td>${r.low}</td><td>${r.cashout}x</td><td>${r.maxRounds}</td><td>${r.maxRepeat}</td>
+                    <td>${r.bets[0]}</td><td>${r.bets[1]} (${r.lossTrigs[0]}L)</td><td>${r.bets[2]} (${r.lossTrigs[1]}L)</td><td>${r.bets[3]} (${r.lossTrigs[2]}L)</td>
+                    <td><button class="del-btn" onclick="deleteRule(${r.id})">X</button></td>
+                </tr>`;
+            });
+        }
+
+        // --- Core Application & Evaluation ---
+        function clearData() {
+            if(confirm("Are you sure you want to clear ALL historical crash data?")) {
+                globalData = [];
+                localStorage.removeItem('crashDataList');
+                localStorage.removeItem('aviator_accumulated_crash_history');
+                isBettingActive = false;
+                isMaxRepeatBeeping = false;
+                needsBaseline = true; 
+                lastKnownPayload = null;
+                if (beepInterval) { clearInterval(beepInterval); beepInterval = null; }
+                updateUIStatus();
+                renderData(globalData);
+            }
+        }
+
+        function updateUIStatus() {
+            let st = document.getElementById('betStatus');
+            if (isMaxRepeatBeeping) {
+                st.innerText = `🚨 MAX REPEAT ALERT! Beep Active`;
+                st.className = 'bet-status alert-beep';
+            } else if(isBettingActive) {
+                let rule = bettingRules.find(r => r.id === activeRuleId);
+                let currentBet = rule ? rule.bets[betStep] : 0;
+                st.innerText = `🔴 BETTING (Amt: ${currentBet} LKR | Out: ${rule.cashout}x | Turn: ${roundsPlayedSession+1}/${rule.maxRounds})`;
+                st.className = 'bet-status active';
+            } else {
+                st.innerText = `⚪ Standby`;
+                st.className = 'bet-status';
+            }
+        }
+
+        function getRatioForRange(ruleType, ruleThreshold, effectiveScopeData) {
+            let count = effectiveScopeData.filter(v => ruleType === 'lt' ? v < ruleThreshold : v >= ruleThreshold).length;
+            return count > 0 ? parseFloat((effectiveScopeData.length / count).toFixed(1)) : 0;
+        }
+
+        function evaluateAutoBetEngine(oldLength, newLength) {
+            if (newLength === 0) return;
+            const scope = parseInt(document.getElementById('scopeSelect').value);
+            const effectiveScopeData = globalData.slice(0, Math.min(globalData.length, scope));
+            
+            if (newLength > oldLength && oldLength > 0) {
+                let latestCrash = globalData[0]; 
+
+                if (isBettingActive) {
+                    let rule = bettingRules.find(r => r.id === activeRuleId);
+                    if (rule) {
+                        if (latestCrash >= rule.cashout) {
+                            betStep = 0;
+                            lossesInStep = 0;
+                        } else {
+                            lossesInStep++;
+                            if (betStep < 3 && lossesInStep >= rule.lossTrigs[betStep]) {
+                                betStep++;
+                                lossesInStep = 0;
+                            }
+                        }
+                        roundsPlayedSession++;
+
+                        let currentRatio = getRatioForRange(rule.type, rule.threshold, effectiveScopeData);
+                        if (roundsPlayedSession >= rule.maxRounds || currentRatio <= rule.low) {
+                            isBettingActive = false;
+                            activeRuleId = null;
+                            if (!isMaxRepeatBeeping && beepInterval) { clearInterval(beepInterval); beepInterval = null; }
+                        }
+                    } else {
+                        isBettingActive = false; 
+                        if (!isMaxRepeatBeeping && beepInterval) { clearInterval(beepInterval); beepInterval = null; }
+                    }
+                }
+            }
+
+            // --- Max Repeat Beep Logic Evaluation ---
+            isMaxRepeatBeeping = false;
+            for (let rule of bettingRules) {
+                let consecutiveCount = 0;
+                // Count consecutive values from the latest roll (index 0) that are less than the rule's value range threshold
+                for (let i = 0; i < globalData.length; i++) {
+                    if (globalData[i] < rule.threshold) {
+                        consecutiveCount++;
+                    } else {
+                        break;
+                    }
+                }
+
+                if (consecutiveCount > rule.maxRepeat) {
+                    isMaxRepeatBeeping = true;
+                    break;
+                }
+            }
+
+            if (isMaxRepeatBeeping) {
+                startBeep();
+            } else if (!isBettingActive && beepInterval) {
+                clearInterval(beepInterval);
+                beepInterval = null;
+            }
+
+            // Standard betting trigger check
+            if (!isBettingActive) {
+                for (let rule of bettingRules) {
+                    let currentRatio = getRatioForRange(rule.type, rule.threshold, effectiveScopeData);
+                    if (currentRatio >= rule.high) {
+                        isBettingActive = true;
+                        activeRuleId = rule.id;
+                        betStep = 0;
+                        lossesInStep = 0;
+                        roundsPlayedSession = 0;
+                        startBeep();
+                        break;
+                    }
+                }
+            }
+
+            updateUIStatus();
+        }
+
+        // --- Charts Setup ---
+        const ctxTrend = document.getElementById('trendChart').getContext('2d');
+        const trendChart = new Chart(ctxTrend, {
+            type: 'line', 
+            data: { labels: [], datasets: [{ label: 'Crash Values', data: [], borderColor: '#1f6feb', backgroundColor: 'rgba(31, 111, 235, 0.1)', fill: true, tension: 0.1 }] },
+            options: { responsive: true, maintainAspectRatio: false, scales: { x: { grid: { color: '#30363d' }, ticks: { font: { size: 9 } } }, y: { grid: { color: '#30363d' }, ticks: { font: { size: 9 } } } }, plugins: { legend: { display: false } } }
+        });
+
+        const ctxRatio = document.getElementById('ratioChart').getContext('2d');
+        const ratioChart = new Chart(ctxRatio, {
+            type: 'line', 
+            data: { 
+                labels: [], 
+                datasets: [
+                    { label: 'Ratio Trend', data: [], borderColor: '#3fb950', backgroundColor: 'rgba(63, 185, 80, 0.1)', fill: true, tension: 0.1 },
+                    { label: 'Target', data: [], borderColor: '#f85149', borderDash: [5, 5], borderWidth: 1.5, fill: false, pointRadius: 0 }
+                ] 
+            },
+            options: { 
+                responsive: true, 
+                maintainAspectRatio: false, 
+                scales: { x: { grid: { color: '#30363d' }, ticks: { font: { size: 9 } } }, y: { grid: { color: '#30363d' }, ticks: { font: { size: 9 } } } }, 
+                plugins: { legend: { display: true, labels: { color: '#c9d1d9', font: { size: 10 }, boxWidth: 12 } } } 
+            }
+        });
+
+        function updateCharts() {
+            let scope = parseInt(document.getElementById('scopeSelect').value);
+            let totalData = globalData.length;
+            let effectiveScope = Math.min(totalData, scope);
+            let chronoData = globalData.slice().reverse();
+            let startIndex = totalData - effectiveScope;
+
+            let labels = [];
+            let trendValues = [];
+            let ratioValues = [];
+            let targetValues = [];
+
+            for (let i = startIndex; i < totalData; i++) {
+                let actualRoundNumber = i + 1; 
+                labels.push(actualRoundNumber);
+                trendValues.push(chronoData[i]);
+
+                let windowStart = Math.max(0, i - scope + 1);
+                let windowData = chronoData.slice(windowStart, i + 1);
+                
+                let matched = windowData.filter(v => selectedRange.type === 'lt' ? v < selectedRange.threshold : v >= selectedRange.threshold).length;
+                let currentRatio = matched > 0 ? parseFloat((windowData.length / matched).toFixed(1)) : 0;
+                
+                ratioValues.push(currentRatio);
+                targetValues.push(selectedRange.target);
+            }
+
+            trendChart.data.labels = labels; 
+            trendChart.data.datasets[0].data = trendValues; 
+            trendChart.update();
+
+            ratioChart.data.labels = labels; 
+            ratioChart.data.datasets[0].data = ratioValues;
+            ratioChart.data.datasets[0].label = `Ratio Trend (${selectedRange.label})`;
+            ratioChart.data.datasets[1].data = targetValues;
+            ratioChart.data.datasets[1].label = `Target (${selectedRange.target})`;
+            ratioChart.update();
+        }
+
+        function handleCSVUpload(event) {
+            const file = event.target.files[0]; if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const text = e.target.result; let lines = text.split(/\r\n|\n/); let newValues = [];
+                lines.forEach(line => {
+                    line.split(',').forEach(col => {
+                        let cleanVal = parseFloat(col.replace(/x/gi, '').trim());
+                        if (!isNaN(cleanVal) && cleanVal > 0) newValues.push(cleanVal);
+                    });
+                });
+                if (newValues.length > 0) { globalData = newValues; renderData(globalData); alert(`Imported ${newValues.length} records!`); }
+            }; reader.readAsText(file);
+        }
+
+        function exportCSV() {
+            if (globalData.length === 0) { alert("No crash data to export!"); return; }
+            let csvContent = "data:text/csv;charset=utf-8,Multiplier\n" + globalData.join("\n");
+            let link = document.createElement("a");
+            link.setAttribute("href", encodeURI(csvContent)); link.setAttribute("download", "aviator_crash_data_export.csv");
+            document.body.appendChild(link); link.click(); document.body.removeChild(link);
+        }
+
+        const dataWindow = document.getElementById('dataWindow');
+        const totalRollsEl = document.getElementById('totalRolls');
+        const headerAvgEl = document.getElementById('headerAvg');
+        const activeRangeLabelEl = document.getElementById('activeRangeLabel');
+
+        function updateAll() { renderData(globalData); }
+        function selectRange(r, rowElement) {
+            selectedRange = r; activeRangeLabelEl.innerText = `(Ratio: ${r.label})`;
+            document.querySelectorAll('.summary-table tr').forEach(tr => tr.classList.remove('selected-range'));
+            rowElement.classList.add('selected-range'); updateCharts();
+        }
+
+        function renderData(dataArray) {
+            if (!dataArray) return;
+            let oldLength = globalData.length;
+            globalData = dataArray;
+            localStorage.setItem('crashDataList', JSON.stringify(globalData));
+            
+            evaluateAutoBetEngine(oldLength, globalData.length);
+
+            totalRollsEl.innerText = dataArray.length;
+            const scope = parseInt(document.getElementById('scopeSelect').value);
+            const effectiveScope = Math.min(dataArray.length, scope);
+            const subset = dataArray.slice(0, effectiveScope);
+
+            headerAvgEl.innerText = `Avg: ${(subset.length > 0 ? (subset.reduce((a, b) => a + b, 0) / subset.length) : 0).toFixed(2)}`;
+
+            dataWindow.innerHTML = ''; let rowsContainer = '';
+            for (let i = 0; i < dataArray.length; i += 20) {
+                let rowChunk = dataArray.slice(i, i + 20);
+                let rowHtml = '<div class="data-row">';
+                rowChunk.forEach(val => {
+                    rowHtml += `<div class="data-cell ${val >= 10 ? 'pink' : (val >= 2 ? 'purple' : 'blue')}">${val.toFixed(2)}x</div>`;
+                });
+                rowsContainer += rowHtml + '</div>';
+            }
+            dataWindow.innerHTML = rowsContainer;
+
+            const mid = Math.ceil(ranges.length / 2);
+            const generateTableHTML = (dataSubset) => {
+                let html = `<table class="summary-table"><tr><th>Range</th><th>Turns</th><th>Cnt</th><th>Ratio</th><th>Tgt</th></tr>`;
+                dataSubset.forEach(r => {
+                    let count = subset.filter(v => r.type === 'lt' ? v < r.threshold : v >= r.threshold).length;
+                    let turnsAgo = dataArray.findIndex(v => r.type === 'lt' ? v < r.threshold : v >= r.threshold);
+                    let isSelected = selectedRange.label === r.label;
+                    html += `<tr class="${isSelected ? 'selected-range' : ''}" onclick='selectRange(${JSON.stringify(r)}, this)'>
+                                <td style="font-weight:bold;">${r.label}</td>
+                                <td>${turnsAgo === -1 ? "-" : turnsAgo}</td><td>${count}</td>
+                                <td>${count > 0 ? (effectiveScope / count).toFixed(1) : 0}</td>
+                                <td style="font-weight:bold; color:#d97706;">${r.target > 0 ? r.target : '-'}</td>
+                             </tr>`;
+                }); return html + `</table>`;
+            };
+            document.getElementById('summaryResult').innerHTML = generateTableHTML(ranges.slice(0, mid)) + generateTableHTML(ranges.slice(mid));
+            updateCharts();
+        }
+
+        function extractNewValues(currentPayload, lastPayload) {
+            if (!lastPayload || lastPayload.length === 0) return [];
+            let matchIndex = -1;
+            for (let i = 0; i < currentPayload.length; i++) {
+                let match = true;
+                let checkLength = Math.min(3, lastPayload.length, currentPayload.length - i);
+                if (checkLength === 0) break;
+                for (let j = 0; j < checkLength; j++) {
+                    if (currentPayload[i + j] !== lastPayload[j]) { match = false; break; }
+                }
+                if (match) { matchIndex = i; break; }
+            }
+            if (matchIndex > 0) return currentPayload.slice(0, matchIndex);
+            return [];
+        }
+
+        window.addEventListener('message', function(event) {
+            if (!isSyncActive) return; 
+            if (event.data && event.data.type === 'AVIATOR_DATA_SYNC') {
+                let incoming = event.data.payload;
+                if (!incoming || incoming.length === 0) return;
+                if (needsBaseline || !lastKnownPayload) {
+                    lastKnownPayload = incoming;
+                    needsBaseline = false;
+                    return; 
+                }
+                let newItems = extractNewValues(incoming, lastKnownPayload);
+                if (newItems.length > 0) {
+                    lastKnownPayload = incoming;
+                    let updatedData = newItems.concat(globalData);
+                    renderData(updatedData);
+                }
+            }
+        });
+
+        renderData(globalData);
+    </script>
+</body>
+</html>
