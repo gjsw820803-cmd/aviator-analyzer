@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Crash Data Analyzer & AI (Auto Bet)</title>
+    <title>Crash Data Analyzer & AI (Auto Bet) — Streak Probability</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
@@ -137,18 +137,19 @@
         }
         .streak-action.primary { background: #238636; border-color: #2ea043; color: white; font-weight: bold; }
         .streak-chart-shell {
-            position: relative; flex: 0 0 440px; min-height: 300px; height: 440px;
+            position: relative; flex: 0 0 245px; min-height: 210px; height: 245px;
             background: #080b12; border: 1px solid #30363d; border-radius: 5px; padding: 8px;
         }
         .streak-chart-shell canvas { width: 100% !important; height: 100% !important; }
-        .streak-summary-wrap { overflow-x: auto; border: 1px solid #30363d; border-radius: 5px; }
-        table.streak-summary { width: 100%; min-width: 620px; border-collapse: collapse; font-size: 11px; text-align: center; }
+        .streak-summary-wrap { overflow-x: auto; border: 1px solid #30363d; border-radius: 5px; max-height: 260px; overflow-y: auto; }
+        table.streak-summary { width: 100%; min-width: 980px; border-collapse: collapse; font-size: 11px; text-align: center; }
         table.streak-summary th, table.streak-summary td { padding: 7px 8px; border: 1px solid #30363d; }
         table.streak-summary th { background: #21262d; color: #fff; }
         table.streak-summary td { background: #111820; color: #c9d1d9; }
         .streak-note { color: #8b949e; font-size: 10px; line-height: 1.5; }
         @media (max-width: 700px) {
-            .streak-chart-shell { flex-basis: 360px; height: 360px; }
+            .streak-chart-shell { flex-basis: 220px; height: 220px; }
+            .streak-toolbar { gap: 5px; }
         }
     </style>
 </head>
@@ -253,18 +254,42 @@
                 <button class="streak-action" onclick="resetStreakZoom()">Reset Zoom</button>
                 <span id="streakLiveStatus" class="streak-note">Waiting for data</span>
             </div>
+
+            <div class="streak-note">
+                Recent History = newest 50 game results (not 50 streak events). Only completed streaks fully observable inside that 50-result window are used in Recent percentages.
+            </div>
+
             <div class="streak-chart-shell">
                 <canvas id="streakChart"></canvas>
             </div>
-            <div><strong style="font-size:12px;">SUMMARY — FULL HISTORY vs LAST 50 STREAK EVENTS</strong></div>
+
+            <div><strong style="font-size:12px;">STREAK DISTRIBUTION — FULL HISTORY vs LATEST 50 RESULTS</strong></div>
             <div class="streak-summary-wrap">
                 <table class="streak-summary">
-                    <thead><tr><th>Category</th><th>Events</th><th>Overall Avg.</th><th>Last 50 Avg.</th><th>Difference</th></tr></thead>
-                    <tbody id="streakSummaryBody"><tr><td colspan="5">No analysis yet</td></tr></tbody>
+                    <thead>
+                        <tr>
+                            <th>Streak Length</th>
+                            <th>Full Events</th>
+                            <th>Full Exact %</th>
+                            <th>Recent Events</th>
+                            <th>Recent Exact %</th>
+                            <th>Full At Least %</th>
+                            <th>Recent At Least %</th>
+                            <th>Full Next-Reach %</th>
+                            <th>Recent Next-Reach %</th>
+                        </tr>
+                    </thead>
+                    <tbody id="streakSummaryBody"><tr><td colspan="9">No analysis yet</td></tr></tbody>
                 </table>
             </div>
+
+            <div id="streakProbabilityRanking" class="streak-note"></div>
             <div id="streakSummaryInfo" class="streak-note"></div>
-            <div class="streak-note">Solid lines = cumulative overall percentage. Dashed lines = rolling percentage across the latest 50 streak events. The newest unfinished streak is included as provisional and may change as new rounds arrive. Historical frequencies do not predict the next result.</div>
+            <div class="streak-note">
+                Exact % = percentage of completed streaks with exactly that length. At Least % = percentage with that length or longer.
+                Next-Reach % = among historical streaks that reached the current streak length, the percentage that continued to the target length.
+                These are historical frequencies, not guarantees or predictions of the next crash.
+            </div>
         </div>
     </div>
 
@@ -605,116 +630,264 @@
             ratioChart.update();
         }
 
-        // --- Streak Analysis (8 lines: 4 categories x Overall/Last 50) ---
+        // --- Streak Analysis: Full history + latest 50 GAME RESULTS ---
         let streakChart = null;
-        const streakColors = {
-            1: '#42A5F5',
-            2: '#FFB74D',
-            3: '#66D19E',
-            4: '#D58BFF'
-        };
 
-        function buildStreakEvents(threshold) {
-            // globalData is newest-first; process from oldest to newest.
-            const chronological = globalData.slice().reverse().map(Number).filter(Number.isFinite);
-            const events = [];
+        function getCompletedStreaks(values, threshold, dropLeftPartial = false) {
+            const runs = [];
             let run = 0;
-            chronological.forEach(value => {
-                if (value >= threshold) {
+            let skippedLeftBoundary = false;
+
+            for (let i = 0; i < values.length; i++) {
+                const value = Number(values[i]);
+                const success = Number.isFinite(value) && value >= threshold;
+
+                if (success) {
                     run++;
-                } else if (run > 0) {
-                    events.push({ length: run, provisional: false });
-                    run = 0;
+                } else {
+                    if (run > 0) {
+                        if (!(dropLeftBoundary && !skippedLeftBoundary)) {
+                            runs.push(run);
+                        }
+                        skippedLeftBoundary = true;
+                        run = 0;
+                    } else if (dropLeftBoundary) {
+                        skippedLeftBoundary = true;
+                    }
                 }
-            });
-            // Include the currently open run so the chart reacts immediately to live rounds.
-            if (run > 0) events.push({ length: run, provisional: true });
-            return { chronological, events };
+            }
+
+            // A run still open at the newest end is provisional, not a completed event.
+            // If the window begins in the middle of a success run, omit that first partial run.
+            if (run > 0 && !(dropLeftBoundary && !skippedLeftBoundary)) {
+                // Intentionally excluded: currently unfinished run.
+            }
+
+            return runs;
+        }
+
+        function countAtLeast(events, length) {
+            return events.filter(value => value >= length).length;
+        }
+
+        function pct(numerator, denominator) {
+            return denominator > 0 ? (numerator / denominator) * 100 : null;
+        }
+
+        function fmtPct(value) {
+            return value === null || !Number.isFinite(value) ? '—' : value.toFixed(2) + '%';
         }
 
         function updateStreakAnalysis() {
             const input = document.getElementById('streakThreshold');
             if (!input) return;
+
             const threshold = Number(input.value);
+            const status = document.getElementById('streakLiveStatus');
             if (!Number.isFinite(threshold) || threshold <= 0) {
-                document.getElementById('streakLiveStatus').textContent = 'Enter a valid multiplier greater than zero.';
+                status.textContent = 'Enter a valid multiplier greater than zero.';
                 return;
             }
-            const { chronological, events } = buildStreakEvents(threshold);
-            const categories = [
-                { key: 1, label: '1 consecutive', color: streakColors[1] },
-                { key: 2, label: '2 consecutive', color: streakColors[2] },
-                { key: 3, label: '3 consecutive', color: streakColors[3] },
-                { key: 4, label: '4+ consecutive', color: streakColors[4] }
-            ];
-            const labels = events.map((_, i) => i + 1);
-            const datasets = [];
-            const summary = [];
 
-            categories.forEach(category => {
-                const flags = events.map(event => {
-                    const bucket = event.length >= 4 ? 4 : event.length;
-                    return bucket === category.key ? 1 : 0;
-                });
-                let running = 0;
-                const overall = flags.map((flag, index) => {
-                    running += flag;
-                    return running / (index + 1) * 100;
-                });
-                const last50 = flags.map((_, index) => {
-                    if (index < 49) return null;
-                    const count = flags.slice(index - 49, index + 1).reduce((a, b) => a + b, 0);
-                    return count / 50 * 100;
-                });
-                const count = flags.reduce((a, b) => a + b, 0);
-                const overallAvg = events.length ? count / events.length * 100 : 0;
-                const last50Avg = events.length >= 50 ? last50[last50.length - 1] : null;
+            // globalData is newest-first. Convert to chronological order.
+            const chronological = globalData.slice().reverse().map(Number).filter(v => Number.isFinite(v) && v > 0);
+            const fullEvents = getCompletedStreaks(chronological, threshold, false);
 
-                datasets.push({
-                    label: category.label + ' — Overall',
-                    data: overall.map((y, i) => ({ x: labels[i], y })),
-                    borderColor: category.color,
-                    borderWidth: 1.35,
+            // The Recent sample is exactly the newest 50 game results.
+            const recentStart = Math.max(0, chronological.length - 50);
+            const recentValues = chronological.slice(recentStart);
+            const leftBoundaryContinues = recentStart > 0 &&
+                recentValues.length > 0 &&
+                recentValues[0] >= threshold &&
+                chronological[recentStart - 1] >= threshold;
+
+            // If the first Recent value continues a streak from before the 50-result window,
+            // discard that partial leading run. The unfinished newest run is also excluded.
+            const recentEvents = getCompletedStreaks(
+                recentValues,
+                threshold,
+                leftBoundaryContinues
+            );
+
+            let currentStreak = 0;
+            // globalData is newest-first, so the live streak starts at index 0.
+            for (let i = 0; i < globalData.length; i++) {
+                const value = Number(globalData[i]);
+                if (Number.isFinite(value) && value >= threshold) currentStreak++;
+                else break;
+            }
+
+            const maxObserved = Math.max(
+                5,
+                currentStreak,
+                fullEvents.length ? Math.max(...fullEvents) : 0,
+                recentEvents.length ? Math.max(...recentEvents) : 0
+            );
+            const maxRows = Math.min(maxObserved, 20);
+            const labels = Array.from({ length: maxRows }, (_, i) =>
+                i === 19 ? '20+' : String(i + 1)
+            );
+
+            const fullExact = labels.map((_, i) => {
+                const n = i + 1;
+                const count = n === 20
+                    ? fullEvents.filter(v => v >= 20).length
+                    : fullEvents.filter(v => v === n).length;
+                return pct(count, fullEvents.length) ?? 0;
+            });
+            const recentExact = labels.map((_, i) => {
+                const n = i + 1;
+                const count = n === 20
+                    ? recentEvents.filter(v => v >= 20).length
+                    : recentEvents.filter(v => v === n).length;
+                return pct(count, recentEvents.length) ?? 0;
+            });
+
+            drawStreakChart(labels, fullExact, recentExact);
+
+            const tbody = document.getElementById('streakSummaryBody');
+            tbody.innerHTML = '';
+
+            for (let i = 1; i <= maxRows; i++) {
+                const isTopBucket = i === 20;
+                const exactFullCount = isTopBucket
+                    ? fullEvents.filter(v => v >= 20).length
+                    : fullEvents.filter(v => v === i).length;
+                const exactRecentCount = isTopBucket
+                    ? recentEvents.filter(v => v >= 20).length
+                    : recentEvents.filter(v => v === i).length;
+
+                const atLeastFullCount = isTopBucket
+                    ? fullEvents.filter(v => v >= 20).length
+                    : countAtLeast(fullEvents, i);
+                const atLeastRecentCount = isTopBucket
+                    ? recentEvents.filter(v => v >= 20).length
+                    : countAtLeast(recentEvents, i);
+
+                // Conditional chance of reaching target length, given that the current
+                // streak length has already been reached in historical completed streaks.
+                const conditionLength = Math.max(1, currentStreak);
+                const fullConditionCount = countAtLeast(fullEvents, conditionLength);
+                const recentConditionCount = countAtLeast(recentEvents, conditionLength);
+                const targetLength = isTopBucket ? 20 : i;
+
+                const fullNext = targetLength >= conditionLength
+                    ? pct(countAtLeast(fullEvents, targetLength), fullConditionCount)
+                    : null;
+                const recentNext = targetLength >= conditionLength
+                    ? pct(countAtLeast(recentEvents, targetLength), recentConditionCount)
+                    : null;
+
+                const tr = document.createElement('tr');
+                const cells = [
+                    isTopBucket ? '20+ consecutive' : `${i} consecutive`,
+                    exactFullCount.toLocaleString(),
+                    fmtPct(pct(exactFullCount, fullEvents.length)),
+                    exactRecentCount.toLocaleString(),
+                    fmtPct(pct(exactRecentCount, recentEvents.length)),
+                    fmtPct(pct(atLeastFullCount, fullEvents.length)),
+                    fmtPct(pct(atLeastRecentCount, recentEvents.length)),
+                    fmtPct(fullNext),
+                    fmtPct(recentNext)
+                ];
+
+                cells.forEach((value, index) => {
+                    const td = document.createElement('td');
+                    td.textContent = value;
+                    if (index === 0) {
+                        td.style.fontWeight = 'bold';
+                        td.style.color = '#79c0ff';
+                    }
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            }
+
+            // Rank the possible next total streak lengths by the full-history conditional rate.
+            const rankingStart = Math.max(1, currentStreak + 1);
+            const ranking = [];
+            const fullBase = countAtLeast(fullEvents, Math.max(1, currentStreak));
+            const recentBase = countAtLeast(recentEvents, Math.max(1, currentStreak));
+
+            for (let target = rankingStart; target <= maxRows; target++) {
+                const fullChance = pct(countAtLeast(fullEvents, target), fullBase);
+                const recentChance = pct(countAtLeast(recentEvents, target), recentBase);
+                ranking.push({ target, fullChance, recentChance });
+            }
+            ranking.sort((a, b) => (b.fullChance ?? -1) - (a.fullChance ?? -1));
+
+            const rankingEl = document.getElementById('streakProbabilityRanking');
+            if (currentStreak > 0) {
+                const rankedText = ranking.slice(0, 5).map((item, index) =>
+                    `${index + 1}. Reach ${item.target}+ total: Full ${fmtPct(item.fullChance)} | Recent 50 ${fmtPct(item.recentChance)}`
+                ).join('  •  ');
+                rankingEl.textContent = `NEXT STREAK RANKING (current streak = ${currentStreak}): ${rankedText || 'Not enough completed streak history.'}`;
+            } else {
+                const rankedText = ranking.slice(0, 5).map((item, index) =>
+                    `${index + 1}. New streak reaches ${item.target}+: Full ${fmtPct(item.fullChance)} | Recent 50 ${fmtPct(item.recentChance)}`
+                ).join('  •  ');
+                rankingEl.textContent = `STREAK-LENGTH RANKING (no active success streak): ${rankedText || 'Not enough completed streak history.'}`;
+            }
+
+            const provisionalNote = currentStreak > 0
+                ? ` Current open streak: ${currentStreak} (provisional; excluded from completed-streak percentages).`
+                : ' No active success streak right now.';
+            const boundaryNote = leftBoundaryContinues
+                ? ' Recent window first partial streak excluded because it began before the 50-result window.'
+                : '';
+
+            document.getElementById('streakSummaryInfo').textContent =
+                `Threshold: ${threshold.toFixed(2)}x or higher | Total game results: ${chronological.length.toLocaleString()} | ` +
+                `Full completed streaks: ${fullEvents.length.toLocaleString()} | Recent results checked: ${recentValues.length} | ` +
+                `Recent completed streaks: ${recentEvents.length.toLocaleString()} | ` +
+                `Recent window = latest ${recentValues.length} game results.${provisionalNote}${boundaryNote} ` +
+                `At Least 1 is 100% by definition when the sample contains completed streaks.`;
+
+            status.textContent =
+                `LIVE • ${chronological.length.toLocaleString()} rounds • Current streak: ${currentStreak} • ` +
+                `Full events: ${fullEvents.length} • Recent-50 events: ${recentEvents.length}`;
+        }
+
+        function drawStreakChart(labels, fullData, recentData) {
+            const canvas = document.getElementById('streakChart');
+            if (!canvas || typeof Chart === 'undefined') return;
+
+            const datasets = [
+                {
+                    label: 'Full History — Exact %',
+                    data: fullData,
+                    borderColor: '#58a6ff',
+                    backgroundColor: 'rgba(88,166,255,0.10)',
+                    borderWidth: 2,
                     borderDash: [],
-                    pointRadius: 0,
-                    pointHoverRadius: 3,
+                    pointRadius: 3,
+                    pointHoverRadius: 5,
                     tension: 0,
                     fill: false
-                });
-                datasets.push({
-                    label: category.label + ' — Last 50',
-                    data: last50.map((y, i) => y === null ? null : ({ x: labels[i], y })),
-                    borderColor: category.color,
-                    borderWidth: 1.55,
-                    borderDash: [4, 3],
-                    pointRadius: 0,
-                    pointHoverRadius: 3,
+                },
+                {
+                    label: 'Latest 50 Results — Exact %',
+                    data: recentData,
+                    borderColor: '#f2cc60',
+                    backgroundColor: 'rgba(242,204,96,0.08)',
+                    borderWidth: 2,
+                    borderDash: [5, 4],
+                    pointRadius: 3,
+                    pointHoverRadius: 5,
                     tension: 0,
                     fill: false,
                     spanGaps: false
-                });
-                summary.push({ label: category.label, color: category.color, count, overallAvg, last50Avg });
-            });
+                }
+            ];
 
-            drawStreakChart(labels, datasets);
-            renderStreakSummary(summary, chronological, events, threshold);
-            const active = events.length && events[events.length - 1].provisional ? events[events.length - 1].length : 0;
-            document.getElementById('streakLiveStatus').textContent =
-                `LIVE • ${globalData.length.toLocaleString()} rounds • ${events.length.toLocaleString()} streak events` +
-                (active ? ` • Current streak: ${active} (provisional)` : '');
-        }
-
-        function drawStreakChart(labels, datasets) {
-            const canvas = document.getElementById('streakChart');
-            if (!canvas || typeof Chart === 'undefined') return;
             if (streakChart) {
                 streakChart.data.labels = labels;
                 streakChart.data.datasets = datasets;
                 streakChart.update('none');
                 return;
             }
-            const zoomPluginAvailable = typeof ChartZoom !== 'undefined';
-            if (zoomPluginAvailable) Chart.register(ChartZoom);
+
+            if (typeof ChartZoom !== 'undefined') Chart.register(ChartZoom);
             streakChart = new Chart(canvas.getContext('2d'), {
                 type: 'line',
                 data: { labels, datasets },
@@ -722,33 +895,61 @@
                     responsive: true,
                     maintainAspectRatio: false,
                     animation: false,
-                    normalized: true,
                     interaction: { mode: 'index', intersect: false },
-                    elements: { line: { capBezierPoints: false }, point: { radius: 0 } },
                     scales: {
                         x: {
-                            type: 'linear',
-                            title: { display: true, text: 'Streak Event Number (Oldest → Newest)', color: '#c9d1d9', font: { size: 11, weight: 'bold' } },
-                            ticks: { color: '#c9d1d9', maxTicksLimit: 12 },
-                            grid: { color: 'rgba(80,95,115,0.25)' }
+                            title: {
+                                display: true,
+                                text: 'Completed Streak Length',
+                                color: '#c9d1d9',
+                                font: { size: 11, weight: 'bold' }
+                            },
+                            ticks: { color: '#c9d1d9' },
+                            grid: { color: 'rgba(80,95,115,0.22)' }
                         },
                         y: {
-                            min: 0, max: 100,
-                            title: { display: true, text: 'Percentage (%)', color: '#c9d1d9', font: { size: 11, weight: 'bold' } },
-                            ticks: { color: '#c9d1d9', callback: value => value + '%' },
+                            min: 0,
+                            max: 100,
+                            title: {
+                                display: true,
+                                text: 'Exact Streak Frequency (%)',
+                                color: '#c9d1d9',
+                                font: { size: 11, weight: 'bold' }
+                            },
+                            ticks: {
+                                stepSize: 20,
+                                color: '#c9d1d9',
+                                callback: value => value + '%'
+                            },
                             grid: { color: 'rgba(80,95,115,0.28)' }
                         }
                     },
                     plugins: {
-                        legend: { position: 'top', labels: { color: '#e6edf3', usePointStyle: true, pointStyle: 'line', boxWidth: 22, boxHeight: 2, padding: 10, font: { size: 10 } } },
-                        tooltip: { callbacks: { label: context => `${context.dataset.label}: ${context.parsed.y.toFixed(2)}%` } },
+                        legend: {
+                            position: 'top',
+                            labels: {
+                                color: '#e6edf3',
+                                usePointStyle: true,
+                                pointStyle: 'line',
+                                boxWidth: 24,
+                                boxHeight: 2,
+                                padding: 10,
+                                font: { size: 10 }
+                            }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: context => `${context.dataset.label}: ${context.parsed.y.toFixed(2)}%`
+                            }
+                        },
                         zoom: {
-                            limits: { x: { min: 1, minRange: 10 }, y: { min: 0, max: 100 } },
-                            pan: { enabled: true, mode: 'x', modifierKey: 'shift' },
+                            limits: { y: { min: 0, max: 100 } },
+                            // Zoom is controlled only by the visible + / - / Reset buttons.
+                            pan: { enabled: false },
                             zoom: {
-                                wheel: { enabled: true },
-                                pinch: { enabled: true },
-                                drag: { enabled: true, backgroundColor: 'rgba(88,166,255,0.12)', borderColor: '#58a6ff', borderWidth: 1 },
+                                wheel: { enabled: false },
+                                pinch: { enabled: false },
+                                drag: { enabled: false },
                                 mode: 'x'
                             }
                         }
@@ -760,34 +961,9 @@
         function zoomStreak(factor) {
             if (streakChart && typeof streakChart.zoom === 'function') streakChart.zoom(factor);
         }
+
         function resetStreakZoom() {
             if (streakChart && typeof streakChart.resetZoom === 'function') streakChart.resetZoom();
-        }
-
-        function renderStreakSummary(summary, chronological, events, threshold) {
-            const tbody = document.getElementById('streakSummaryBody');
-            tbody.innerHTML = '';
-            summary.forEach(item => {
-                const tr = document.createElement('tr');
-                const diff = item.last50Avg === null ? null : item.last50Avg - item.overallAvg;
-                const values = [item.label, item.count.toLocaleString(), item.overallAvg.toFixed(2) + '%',
-                    item.last50Avg === null ? 'Need 50 events' : item.last50Avg.toFixed(2) + '%',
-                    diff === null ? '—' : (diff >= 0 ? '+' : '') + diff.toFixed(2) + ' pp'];
-                values.forEach((value, index) => {
-                    const td = document.createElement('td');
-                    td.textContent = value;
-                    if (index === 0) { td.style.color = item.color; td.style.fontWeight = 'bold'; }
-                    tr.appendChild(td);
-                });
-                tbody.appendChild(tr);
-            });
-            const qualified = chronological.filter(value => value >= threshold).length;
-            const provisional = events.length && events[events.length - 1].provisional ? 1 : 0;
-            document.getElementById('streakSummaryInfo').textContent =
-                `Threshold: ${threshold}x | Total rounds: ${chronological.length.toLocaleString()} | ` +
-                `Rounds meeting threshold: ${qualified.toLocaleString()} | Streak events: ${events.length.toLocaleString()} | ` +
-                `Last-50 window: latest 50 streak events${provisional ? ' (including current provisional streak)' : ''}. ` +
-                `Positive difference means the latest 50-event percentage is above the full-history percentage.`;
         }
 
         function handleCSVUpload(event) {
@@ -930,6 +1106,7 @@
         });
 
         renderData(globalData);
+        updateStreakAnalysis();
         window.addEventListener('resize', () => {
             if (streakChart) streakChart.resize();
         });
