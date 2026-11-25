@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <title>Crash Data Analyzer & AI (Auto Bet)</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
     <style>
         * { box-sizing: border-box; }
         body {
@@ -115,6 +117,39 @@
         .rules-grid th, .rules-grid td { border: 1px solid #30363d; padding: 3px; }
         .rules-grid th { background: #21262d; }
         .del-btn { background: #da3633; color: white; border: none; border-radius: 2px; cursor: pointer; padding: 2px 6px; }
+
+        /* Streak Analysis */
+        .tab-btn.streak-tab { background: #6e40c9; color: #fff; border-color: #8957e5; }
+        #streakView { overflow: auto; padding: 8px; gap: 8px; }
+        .streak-toolbar {
+            display: flex; flex-wrap: wrap; align-items: end; gap: 8px;
+            padding: 8px; background: #0d1117; border: 1px solid #30363d; border-radius: 5px;
+        }
+        .streak-field { display: flex; flex-direction: column; gap: 3px; }
+        .streak-field label { color: #8b949e; font-size: 10px; }
+        .streak-field input {
+            width: 100px; padding: 6px; background: #21262d; color: #fff;
+            border: 1px solid #484f58; border-radius: 4px; font-size: 12px;
+        }
+        .streak-action {
+            border: 1px solid #484f58; background: #21262d; color: #e6edf3;
+            padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 11px;
+        }
+        .streak-action.primary { background: #238636; border-color: #2ea043; color: white; font-weight: bold; }
+        .streak-chart-shell {
+            position: relative; flex: 0 0 440px; min-height: 300px; height: 440px;
+            background: #080b12; border: 1px solid #30363d; border-radius: 5px; padding: 8px;
+        }
+        .streak-chart-shell canvas { width: 100% !important; height: 100% !important; }
+        .streak-summary-wrap { overflow-x: auto; border: 1px solid #30363d; border-radius: 5px; }
+        table.streak-summary { width: 100%; min-width: 620px; border-collapse: collapse; font-size: 11px; text-align: center; }
+        table.streak-summary th, table.streak-summary td { padding: 7px 8px; border: 1px solid #30363d; }
+        table.streak-summary th { background: #21262d; color: #fff; }
+        table.streak-summary td { background: #111820; color: #c9d1d9; }
+        .streak-note { color: #8b949e; font-size: 10px; line-height: 1.5; }
+        @media (max-width: 700px) {
+            .streak-chart-shell { flex-basis: 360px; height: 360px; }
+        }
     </style>
 </head>
 <body>
@@ -130,6 +165,7 @@
             <button class="tab-btn" onclick="switchChartTab(event, 'rulesView')">⚙️ Rules</button>
             <button class="tab-btn active" onclick="switchChartTab(event, 'valueChartView')">Value Chart</button>
             <button class="tab-btn" onclick="switchChartTab(event, 'ratioChartView')">Ratio Chart</button>
+            <button class="tab-btn streak-tab" onclick="switchChartTab(event, 'streakView')">📈 Streak Analysis</button>
             <label class="tab-btn upload-btn" title="Upload CSV Data">
                 📁 CSV <input type="file" id="csvFileInput" accept=".csv, .txt" style="display: none;" onchange="handleCSVUpload(event)">
             </label>
@@ -203,6 +239,33 @@
         <div id="ratioChartView" class="chart-view-section">
             <canvas id="ratioChart"></canvas>
         </div>
+
+        <!-- Streak Analysis View -->
+        <div id="streakView" class="chart-view-section">
+            <div class="streak-toolbar">
+                <div class="streak-field">
+                    <label for="streakThreshold">Minimum Multiplier (x)</label>
+                    <input id="streakThreshold" type="number" min="0.01" step="0.01" value="2.00">
+                </div>
+                <button class="streak-action primary" onclick="updateStreakAnalysis()">Generate / Refresh</button>
+                <button class="streak-action" onclick="zoomStreak(1.25)">＋ Zoom In</button>
+                <button class="streak-action" onclick="zoomStreak(0.8)">－ Zoom Out</button>
+                <button class="streak-action" onclick="resetStreakZoom()">Reset Zoom</button>
+                <span id="streakLiveStatus" class="streak-note">Waiting for data</span>
+            </div>
+            <div class="streak-chart-shell">
+                <canvas id="streakChart"></canvas>
+            </div>
+            <div><strong style="font-size:12px;">SUMMARY — FULL HISTORY vs LAST 50 STREAK EVENTS</strong></div>
+            <div class="streak-summary-wrap">
+                <table class="streak-summary">
+                    <thead><tr><th>Category</th><th>Events</th><th>Overall Avg.</th><th>Last 50 Avg.</th><th>Difference</th></tr></thead>
+                    <tbody id="streakSummaryBody"><tr><td colspan="5">No analysis yet</td></tr></tbody>
+                </table>
+            </div>
+            <div id="streakSummaryInfo" class="streak-note"></div>
+            <div class="streak-note">Solid lines = cumulative overall percentage. Dashed lines = rolling percentage across the latest 50 streak events. The newest unfinished streak is included as provisional and may change as new rounds arrive. Historical frequencies do not predict the next result.</div>
+        </div>
     </div>
 
     <script>
@@ -217,6 +280,7 @@
             document.getElementById(viewId).classList.add('active');
             evt.currentTarget.classList.add('active');
             if(viewId === 'valueChartView' || viewId === 'ratioChartView') updateCharts();
+            if(viewId === 'streakView') updateStreakAnalysis();
             if(viewId === 'rulesView') renderRules();
         }
 
@@ -360,13 +424,13 @@
 
         // --- Core Application & Evaluation ---
         function clearData() {
-            if(confirm("Are you sure you want to clear ALL historical crash data?")) {
+            if(confirm("Clear the Analyzer's displayed history? The Tampermonkey captured history will be kept and can sync back again.")) {
                 globalData = [];
                 localStorage.removeItem('crashDataList');
-                localStorage.removeItem('aviator_accumulated_crash_history');
+                // Do not delete aviator_accumulated_crash_history: it is the permanent capture store.
                 isBettingActive = false;
                 isMaxRepeatBeeping = false;
-                needsBaseline = true; 
+                needsBaseline = true;
                 lastKnownPayload = null;
                 if (beepInterval) { clearInterval(beepInterval); beepInterval = null; }
                 updateUIStatus();
@@ -541,6 +605,191 @@
             ratioChart.update();
         }
 
+        // --- Streak Analysis (8 lines: 4 categories x Overall/Last 50) ---
+        let streakChart = null;
+        const streakColors = {
+            1: '#42A5F5',
+            2: '#FFB74D',
+            3: '#66D19E',
+            4: '#D58BFF'
+        };
+
+        function buildStreakEvents(threshold) {
+            // globalData is newest-first; process from oldest to newest.
+            const chronological = globalData.slice().reverse().map(Number).filter(Number.isFinite);
+            const events = [];
+            let run = 0;
+            chronological.forEach(value => {
+                if (value >= threshold) {
+                    run++;
+                } else if (run > 0) {
+                    events.push({ length: run, provisional: false });
+                    run = 0;
+                }
+            });
+            // Include the currently open run so the chart reacts immediately to live rounds.
+            if (run > 0) events.push({ length: run, provisional: true });
+            return { chronological, events };
+        }
+
+        function updateStreakAnalysis() {
+            const input = document.getElementById('streakThreshold');
+            if (!input) return;
+            const threshold = Number(input.value);
+            if (!Number.isFinite(threshold) || threshold <= 0) {
+                document.getElementById('streakLiveStatus').textContent = 'Enter a valid multiplier greater than zero.';
+                return;
+            }
+            const { chronological, events } = buildStreakEvents(threshold);
+            const categories = [
+                { key: 1, label: '1 consecutive', color: streakColors[1] },
+                { key: 2, label: '2 consecutive', color: streakColors[2] },
+                { key: 3, label: '3 consecutive', color: streakColors[3] },
+                { key: 4, label: '4+ consecutive', color: streakColors[4] }
+            ];
+            const labels = events.map((_, i) => i + 1);
+            const datasets = [];
+            const summary = [];
+
+            categories.forEach(category => {
+                const flags = events.map(event => {
+                    const bucket = event.length >= 4 ? 4 : event.length;
+                    return bucket === category.key ? 1 : 0;
+                });
+                let running = 0;
+                const overall = flags.map((flag, index) => {
+                    running += flag;
+                    return running / (index + 1) * 100;
+                });
+                const last50 = flags.map((_, index) => {
+                    if (index < 49) return null;
+                    const count = flags.slice(index - 49, index + 1).reduce((a, b) => a + b, 0);
+                    return count / 50 * 100;
+                });
+                const count = flags.reduce((a, b) => a + b, 0);
+                const overallAvg = events.length ? count / events.length * 100 : 0;
+                const last50Avg = events.length >= 50 ? last50[last50.length - 1] : null;
+
+                datasets.push({
+                    label: category.label + ' — Overall',
+                    data: overall.map((y, i) => ({ x: labels[i], y })),
+                    borderColor: category.color,
+                    borderWidth: 1.35,
+                    borderDash: [],
+                    pointRadius: 0,
+                    pointHoverRadius: 3,
+                    tension: 0,
+                    fill: false
+                });
+                datasets.push({
+                    label: category.label + ' — Last 50',
+                    data: last50.map((y, i) => y === null ? null : ({ x: labels[i], y })),
+                    borderColor: category.color,
+                    borderWidth: 1.55,
+                    borderDash: [4, 3],
+                    pointRadius: 0,
+                    pointHoverRadius: 3,
+                    tension: 0,
+                    fill: false,
+                    spanGaps: false
+                });
+                summary.push({ label: category.label, color: category.color, count, overallAvg, last50Avg });
+            });
+
+            drawStreakChart(labels, datasets);
+            renderStreakSummary(summary, chronological, events, threshold);
+            const active = events.length && events[events.length - 1].provisional ? events[events.length - 1].length : 0;
+            document.getElementById('streakLiveStatus').textContent =
+                `LIVE • ${globalData.length.toLocaleString()} rounds • ${events.length.toLocaleString()} streak events` +
+                (active ? ` • Current streak: ${active} (provisional)` : '');
+        }
+
+        function drawStreakChart(labels, datasets) {
+            const canvas = document.getElementById('streakChart');
+            if (!canvas || typeof Chart === 'undefined') return;
+            if (streakChart) {
+                streakChart.data.labels = labels;
+                streakChart.data.datasets = datasets;
+                streakChart.update('none');
+                return;
+            }
+            const zoomPluginAvailable = typeof ChartZoom !== 'undefined';
+            if (zoomPluginAvailable) Chart.register(ChartZoom);
+            streakChart = new Chart(canvas.getContext('2d'), {
+                type: 'line',
+                data: { labels, datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    normalized: true,
+                    interaction: { mode: 'index', intersect: false },
+                    elements: { line: { capBezierPoints: false }, point: { radius: 0 } },
+                    scales: {
+                        x: {
+                            type: 'linear',
+                            title: { display: true, text: 'Streak Event Number (Oldest → Newest)', color: '#c9d1d9', font: { size: 11, weight: 'bold' } },
+                            ticks: { color: '#c9d1d9', maxTicksLimit: 12 },
+                            grid: { color: 'rgba(80,95,115,0.25)' }
+                        },
+                        y: {
+                            min: 0, max: 100,
+                            title: { display: true, text: 'Percentage (%)', color: '#c9d1d9', font: { size: 11, weight: 'bold' } },
+                            ticks: { color: '#c9d1d9', callback: value => value + '%' },
+                            grid: { color: 'rgba(80,95,115,0.28)' }
+                        }
+                    },
+                    plugins: {
+                        legend: { position: 'top', labels: { color: '#e6edf3', usePointStyle: true, pointStyle: 'line', boxWidth: 22, boxHeight: 2, padding: 10, font: { size: 10 } } },
+                        tooltip: { callbacks: { label: context => `${context.dataset.label}: ${context.parsed.y.toFixed(2)}%` } },
+                        zoom: {
+                            limits: { x: { min: 1, minRange: 10 }, y: { min: 0, max: 100 } },
+                            pan: { enabled: true, mode: 'x', modifierKey: 'shift' },
+                            zoom: {
+                                wheel: { enabled: true },
+                                pinch: { enabled: true },
+                                drag: { enabled: true, backgroundColor: 'rgba(88,166,255,0.12)', borderColor: '#58a6ff', borderWidth: 1 },
+                                mode: 'x'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function zoomStreak(factor) {
+            if (streakChart && typeof streakChart.zoom === 'function') streakChart.zoom(factor);
+        }
+        function resetStreakZoom() {
+            if (streakChart && typeof streakChart.resetZoom === 'function') streakChart.resetZoom();
+        }
+
+        function renderStreakSummary(summary, chronological, events, threshold) {
+            const tbody = document.getElementById('streakSummaryBody');
+            tbody.innerHTML = '';
+            summary.forEach(item => {
+                const tr = document.createElement('tr');
+                const diff = item.last50Avg === null ? null : item.last50Avg - item.overallAvg;
+                const values = [item.label, item.count.toLocaleString(), item.overallAvg.toFixed(2) + '%',
+                    item.last50Avg === null ? 'Need 50 events' : item.last50Avg.toFixed(2) + '%',
+                    diff === null ? '—' : (diff >= 0 ? '+' : '') + diff.toFixed(2) + ' pp'];
+                values.forEach((value, index) => {
+                    const td = document.createElement('td');
+                    td.textContent = value;
+                    if (index === 0) { td.style.color = item.color; td.style.fontWeight = 'bold'; }
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+            const qualified = chronological.filter(value => value >= threshold).length;
+            const provisional = events.length && events[events.length - 1].provisional ? 1 : 0;
+            document.getElementById('streakSummaryInfo').textContent =
+                `Threshold: ${threshold}x | Total rounds: ${chronological.length.toLocaleString()} | ` +
+                `Rounds meeting threshold: ${qualified.toLocaleString()} | Streak events: ${events.length.toLocaleString()} | ` +
+                `Last-50 window: latest 50 streak events${provisional ? ' (including current provisional streak)' : ''}. ` +
+                `Positive difference means the latest 50-event percentage is above the full-history percentage.`;
+        }
+
         function handleCSVUpload(event) {
             const file = event.target.files[0]; if (!file) return;
             const reader = new FileReader();
@@ -619,6 +868,8 @@
             };
             document.getElementById('summaryResult').innerHTML = generateTableHTML(ranges.slice(0, mid)) + generateTableHTML(ranges.slice(mid));
             updateCharts();
+            // Keep Streak Analysis synchronized with every history update.
+            if (document.getElementById('streakView')?.classList.contains('active')) updateStreakAnalysis();
         }
 
         function extractNewValues(currentPayload, lastPayload) {
@@ -638,25 +889,50 @@
         }
 
         window.addEventListener('message', function(event) {
-            if (!isSyncActive) return; 
-            if (event.data && event.data.type === 'AVIATOR_DATA_SYNC') {
-                let incoming = event.data.payload;
-                if (!incoming || incoming.length === 0) return;
-                if (needsBaseline || !lastKnownPayload) {
-                    lastKnownPayload = incoming;
-                    needsBaseline = false;
-                    return; 
+            if (!isSyncActive || !event.data || event.data.type !== 'AVIATOR_DATA_SYNC') return;
+            // Accept only messages from the opener game tab on the expected game domains.
+            let allowedOrigin = false;
+            try {
+                const host = new URL(event.origin).hostname;
+                allowedOrigin = host === 'sportway.lk' || host.endsWith('.sportway.lk') ||
+                    host === 'spribegaming.com' || host.endsWith('.spribegaming.com');
+            } catch (_) {}
+            if (!allowedOrigin || (window.opener && event.source !== window.opener)) return;
+
+            const incoming = Array.isArray(event.data.payload)
+                ? event.data.payload.map(Number).filter(v => Number.isFinite(v) && v > 0)
+                : [];
+            if (!incoming.length) return;
+
+            if (needsBaseline || !lastKnownPayload) {
+                lastKnownPayload = incoming.slice();
+                needsBaseline = false;
+                // Seed a fresh Analyzer with the full accumulated history from Tampermonkey.
+                if (globalData.length === 0) renderData(incoming.slice());
+                else {
+                    const newItems = extractNewValues(incoming, globalData);
+                    if (newItems.length) renderData(newItems.concat(globalData));
                 }
-                let newItems = extractNewValues(incoming, lastKnownPayload);
-                if (newItems.length > 0) {
-                    lastKnownPayload = incoming;
-                    let updatedData = newItems.concat(globalData);
-                    renderData(updatedData);
-                }
+                return;
+            }
+
+            const newItems = extractNewValues(incoming, lastKnownPayload);
+            if (newItems.length > 0) {
+                lastKnownPayload = incoming.slice();
+                renderData(newItems.concat(globalData));
+            } else if (incoming.length > lastKnownPayload.length && incoming[0] !== lastKnownPayload[0]) {
+                // Fallback for a single new round when the overlap is shorter than 3 values.
+                lastKnownPayload = incoming.slice();
+                renderData([incoming[0]].concat(globalData));
+            } else {
+                lastKnownPayload = incoming.slice();
             }
         });
 
         renderData(globalData);
+        window.addEventListener('resize', () => {
+            if (streakChart) streakChart.resize();
+        });
     </script>
 </body>
 </html>
