@@ -245,7 +245,7 @@
         <div id="streakView" class="chart-view-section">
             <div class="streak-toolbar">
                 <div class="streak-field">
-                    <label for="streakThreshold">Minimum Multiplier (x)</label>
+                    <label for="streakThreshold">Maximum Multiplier (x) — count values BELOW this</label>
                     <input id="streakThreshold" type="number" min="0.01" step="0.01" value="2.00">
                 </div>
                 <button class="streak-action primary" onclick="updateStreakAnalysis()">Generate / Refresh</button>
@@ -256,14 +256,14 @@
             </div>
 
             <div class="streak-note">
-                Recent History = newest 50 game results (not 50 streak events). Only completed streaks fully observable inside that 50-result window are used in Recent percentages.
+                Low streak = consecutive game results strictly BELOW the selected multiplier. Recent History = newest 50 game results (not 50 streak events). Only completed low streaks fully observable inside that 50-result window are used in Recent percentages.
             </div>
 
             <div class="streak-chart-shell">
                 <canvas id="streakChart"></canvas>
             </div>
 
-            <div><strong style="font-size:12px;">STREAK DISTRIBUTION — FULL HISTORY vs LATEST 50 RESULTS</strong></div>
+            <div><strong style="font-size:12px;">BELOW-THRESHOLD STREAK DISTRIBUTION — FULL HISTORY vs LATEST 50 RESULTS</strong></div>
             <div class="streak-summary-wrap">
                 <table class="streak-summary">
                     <thead>
@@ -286,9 +286,9 @@
             <div id="streakProbabilityRanking" class="streak-note"></div>
             <div id="streakSummaryInfo" class="streak-note"></div>
             <div class="streak-note">
-                Exact % = percentage of completed streaks with exactly that length. At Least % = percentage with that length or longer.
-                Next-Reach % = among historical streaks that reached the current streak length, the percentage that continued to the target length.
-                These are historical frequencies, not guarantees or predictions of the next crash.
+                Exact % = percentage of completed below-threshold streaks with exactly that length. At Least % = percentage with that length or longer.
+                Next-Reach % = among historical below-threshold streaks that reached the current low-streak length, the percentage that continued to the target length.
+                A low streak consists only of consecutive results strictly BELOW the selected multiplier. These are historical frequencies, not guarantees or predictions of the next crash.
             </div>
         </div>
     </div>
@@ -640,9 +640,9 @@
 
             for (let i = 0; i < values.length; i++) {
                 const value = Number(values[i]);
-                const success = Number.isFinite(value) && value >= threshold;
+                const isBelowThreshold = Number.isFinite(value) && value < threshold;
 
-                if (success) {
+                if (isBelowThreshold) {
                     run++;
                 } else {
                     if (run > 0) {
@@ -658,9 +658,9 @@
             }
 
             // A run still open at the newest end is provisional, not a completed event.
-            // If the window begins in the middle of a success run, omit that first partial run.
+            // If the window begins in the middle of a below-threshold run, omit that first partial run.
             if (run > 0 && !(dropLeftPartial && !skippedLeftBoundary)) {
-                // Intentionally excluded: currently unfinished run.
+                // Intentionally excluded: currently unfinished below-threshold run.
             }
 
             return runs;
@@ -698,8 +698,8 @@
             const recentValues = chronological.slice(recentStart);
             const leftBoundaryContinues = recentStart > 0 &&
                 recentValues.length > 0 &&
-                recentValues[0] >= threshold &&
-                chronological[recentStart - 1] >= threshold;
+                recentValues[0] < threshold &&
+                chronological[recentStart - 1] < threshold;
 
             // If the first Recent value continues a streak from before the 50-result window,
             // discard that partial leading run. The unfinished newest run is also excluded.
@@ -713,7 +713,7 @@
             // globalData is newest-first, so the live streak starts at index 0.
             for (let i = 0; i < globalData.length; i++) {
                 const value = Number(globalData[i]);
-                if (Number.isFinite(value) && value >= threshold) currentStreak++;
+                if (Number.isFinite(value) && value < threshold) currentStreak++;
                 else break;
             }
 
@@ -826,18 +826,18 @@
                 const rankedText = ranking.slice(0, 5).map((item, index) =>
                     `${index + 1}. New streak reaches ${item.target}+: Full ${fmtPct(item.fullChance)} | Recent 50 ${fmtPct(item.recentChance)}`
                 ).join('  •  ');
-                rankingEl.textContent = `STREAK-LENGTH RANKING (no active success streak): ${rankedText || 'Not enough completed streak history.'}`;
+                rankingEl.textContent = `STREAK-LENGTH RANKING (no active below-threshold streak): ${rankedText || 'Not enough completed streak history.'}`;
             }
 
             const provisionalNote = currentStreak > 0
                 ? ` Current open streak: ${currentStreak} (provisional; excluded from completed-streak percentages).`
-                : ' No active success streak right now.';
+                : ' No active below-threshold streak right now.';
             const boundaryNote = leftBoundaryContinues
                 ? ' Recent window first partial streak excluded because it began before the 50-result window.'
                 : '';
 
             document.getElementById('streakSummaryInfo').textContent =
-                `Threshold: ${threshold.toFixed(2)}x or higher | Total game results: ${chronological.length.toLocaleString()} | ` +
+                `Rule: results strictly below ${threshold.toFixed(2)}x | Total game results: ${chronological.length.toLocaleString()} | ` +
                 `Full completed streaks: ${fullEvents.length.toLocaleString()} | Recent results checked: ${recentValues.length} | ` +
                 `Recent completed streaks: ${recentEvents.length.toLocaleString()} | ` +
                 `Recent window = latest ${recentValues.length} game results.${provisionalNote}${boundaryNote} ` +
@@ -854,7 +854,7 @@
 
             const datasets = [
                 {
-                    label: 'Full History — Exact %',
+                    label: 'Full History — Exact Below-Threshold Streak %',
                     data: fullData,
                     borderColor: '#58a6ff',
                     backgroundColor: 'rgba(88,166,255,0.10)',
@@ -866,7 +866,7 @@
                     fill: false
                 },
                 {
-                    label: 'Latest 50 Results — Exact %',
+                    label: 'Latest 50 Results — Exact Below-Threshold Streak %',
                     data: recentData,
                     borderColor: '#f2cc60',
                     backgroundColor: 'rgba(242,204,96,0.08)',
@@ -900,7 +900,7 @@
                         x: {
                             title: {
                                 display: true,
-                                text: 'Completed Streak Length',
+                                text: 'Consecutive Results Below Threshold',
                                 color: '#c9d1d9',
                                 font: { size: 11, weight: 'bold' }
                             },
@@ -912,7 +912,7 @@
                             max: 100,
                             title: {
                                 display: true,
-                                text: 'Exact Streak Frequency (%)',
+                                text: 'Below-Threshold Streak Frequency (%)',
                                 color: '#c9d1d9',
                                 font: { size: 11, weight: 'bold' }
                             },
