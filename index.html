@@ -646,12 +646,12 @@
                     run++;
                 } else {
                     if (run > 0) {
-                        if (!(dropLeftBoundary && !skippedLeftBoundary)) {
+                        if (!(dropLeftPartial && !skippedLeftBoundary)) {
                             runs.push(run);
                         }
                         skippedLeftBoundary = true;
                         run = 0;
-                    } else if (dropLeftBoundary) {
+                    } else if (dropLeftPartial) {
                         skippedLeftBoundary = true;
                     }
                 }
@@ -659,7 +659,7 @@
 
             // A run still open at the newest end is provisional, not a completed event.
             // If the window begins in the middle of a success run, omit that first partial run.
-            if (run > 0 && !(dropLeftBoundary && !skippedLeftBoundary)) {
+            if (run > 0 && !(dropLeftPartial && !skippedLeftBoundary)) {
                 // Intentionally excluded: currently unfinished run.
             }
 
