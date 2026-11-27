@@ -221,10 +221,17 @@
         <div id="streakChartView" class="chart-view-section">
             <div class="streak-chart-wrap">
                 <div class="streak-chart-heading">
-                    <strong>Below 2x Streak Probability</strong>
+                    <strong id="streakChartTitle">Streak Probability</strong>
                     <div class="streak-chart-tools">
-                        <button type="button" onclick="zoomStreakChart(0.7)" title="Zoom in">＋</button>
-                        <button type="button" onclick="zoomStreakChart(1.4)" title="Zoom out">－</button>
+                        <label for="streakThreshold" style="color:#c9d1d9;">Value below</label>
+                        <input id="streakThreshold" type="number" min="0.01" step="0.01" value="2" style="width:65px;background:#21262d;color:#fff;border:1px solid #48515c;border-radius:3px;padding:3px;">
+                        <button type="button" onclick="applyStreakSettings()">Apply</button>
+                        <select id="streakRollingMode" onchange="applyStreakSettings()" style="background:#21262d;color:#fff;border:1px solid #48515c;border-radius:3px;padding:3px;font-size:10px;">
+                            <option value="streaks">Last 50 Streaks</option>
+                            <option value="rounds">Last 50 Rounds</option>
+                        </select>
+                        <button type="button" onclick="zoomStreakChart(0.7)" title="Zoom in X and Y">＋</button>
+                        <button type="button" onclick="zoomStreakChart(1.4)" title="Zoom out X and Y">－</button>
                         <button type="button" onclick="resetStreakChartZoom()" title="Reset zoom">Reset</button>
                         <span id="streakChartStatus">Waiting for data</span>
                     </div>
@@ -587,12 +594,18 @@
             ratioChart.update();
         }
 
-        // --- Below-2x streak probability chart (one chart, 12 independently toggleable lines) ---
+        // --- Configurable streak probability chart ---
         const STREAK_DEFAULT_WINDOW_SIZE = 200;
-        const STREAK_MIN_WINDOW_SIZE = 10;
+        const STREAK_MIN_WINDOW_SIZE = 8;
+        const STREAK_ROLLING_COUNT = 50;
         let streakWindowSize = STREAK_DEFAULT_WINDOW_SIZE;
         let streakCurrentStart = 1;
-        const streakLineVisibility = Object.create(null);
+        let streakYZoomFactor = 1;
+        let streakHasZoomed = false;
+        let streakThresholdValue = 2;
+        let streakRollingMode = 'streaks';
+        let streakLineVisibility = {};
+        try { streakLineVisibility = JSON.parse(localStorage.getItem('streakLineVisibility') || '{}') || {}; } catch (_) { streakLineVisibility = {}; }
         const streakCategories = [
             { key: '1', label: 'Streak 1', color: '#3b82f6' },
             { key: '2', label: 'Streak 2', color: '#06b6d4' },
@@ -605,25 +618,27 @@
         let streakChartAllLabels = [];
         let streakChartAllDatasets = [];
 
-        function getCompletedBelow2xStreaks(values) {
-            // Analyzer stores latest-first; reverse to chronological order.
+        function getCompletedStreakEvents(values, threshold) {
             const chronological = values.slice().reverse().map(Number).filter(v => Number.isFinite(v) && v > 0);
             const events = [];
             let run = 0;
-            const oldestRoundIsBelow2x = chronological.length > 0 && chronological[0] < 2;
+            let runStartRound = 0;
+            const oldestRoundIsBelow = chronological.length > 0 && chronological[0] < threshold;
             let firstRunClosed = false;
-            for (const value of chronological) {
-                if (value < 2) {
+            for (let i = 0; i < chronological.length; i++) {
+                if (chronological[i] < threshold) {
+                    if (run === 0) runStartRound = i + 1;
                     run++;
                 } else if (run > 0) {
-                    // If the oldest recorded round is below 2x, that first run may be cut off
-                    // by the beginning of the captured history, so omit it like the approved sample analysis.
-                    if (!(oldestRoundIsBelow2x && !firstRunClosed)) events.push(run);
+                    // Exclude a potentially incomplete streak touching the oldest captured round.
+                    if (!(oldestRoundIsBelow && !firstRunClosed)) {
+                        events.push({ length: run, startRound: runStartRound, endRound: i + 1 });
+                    }
                     firstRunClosed = true;
                     run = 0;
                 }
             }
-            // Do not include a run still open at the newest end: it is incomplete.
+            // The newest streak is still open, so it is not counted until a value >= threshold closes it.
             return events;
         }
 
@@ -632,51 +647,58 @@
             const counts = Object.fromEntries(keys.map(k => [k, 0]));
             const overall = Object.fromEntries(keys.map(k => [k, []]));
             const rolling = Object.fromEntries(keys.map(k => [k, []]));
-            const labels = [];
+            const rollingCounts = Object.fromEntries(keys.map(k => [k, 0]));
+            let rollingStart = 0;
+            const labels = events.map((_, i) => String(i + 1));
+            const rollingLabel = streakRollingMode === 'rounds' ? 'Last 50 Rounds %' : 'Last 50 Streaks %';
 
             for (let i = 0; i < events.length; i++) {
-                const key = events[i] >= 6 ? '6+' : String(events[i]);
-                counts[key]++;
-                labels.push(i + 1);
-                for (const k of keys) {
-                    overall[k].push((counts[k] / (i + 1)) * 100);
-                    const start = Math.max(0, i - 49);
-                    let windowCount = 0;
-                    for (let j = start; j <= i; j++) {
-                        const eventKey = events[j] >= 6 ? '6+' : String(events[j]);
-                        if (eventKey === k) windowCount++;
+                const eventKey = events[i].length >= 6 ? '6+' : String(events[i].length);
+                counts[eventKey]++;
+                for (const key of keys) {
+                    overall[key].push((counts[key] / (i + 1)) * 100);
+                    let windowCount;
+                    let windowLength;
+                    if (streakRollingMode === 'rounds') {
+                        const firstRoundInWindow = events[i].endRound - (STREAK_ROLLING_COUNT - 1);
+                        while (rollingStart <= i && events[rollingStart].endRound < firstRoundInWindow) {
+                            const removedKey = events[rollingStart].length >= 6 ? '6+' : String(events[rollingStart].length);
+                            rollingCounts[removedKey]--;
+                            rollingStart++;
+                        }
+                        // Add current event to the rolling 50-round bucket.
+                        const currentKey = events[i].length >= 6 ? '6+' : String(events[i].length);
+                        rollingCounts[currentKey]++;
+                        windowLength = i - rollingStart + 1;
+                        windowCount = rollingCounts[key];
+                    } else {
+                        const firstEvent = Math.max(0, i - STREAK_ROLLING_COUNT + 1);
+                        windowLength = i - firstEvent + 1;
+                        windowCount = 0;
+                        for (let j = firstEvent; j <= i; j++) {
+                            const candidateKey = events[j].length >= 6 ? '6+' : String(events[j].length);
+                            if (candidateKey === key) windowCount++;
+                        }
                     }
-                    rolling[k].push((windowCount / (i - start + 1)) * 100);
+                    rolling[key].push((windowCount / Math.max(1, windowLength)) * 100);
                 }
             }
 
             const datasets = [];
             for (const category of streakCategories) {
                 datasets.push({
+                    key: `${category.key}|overall`,
                     label: `${category.label} – Overall %`,
                     data: overall[category.key],
-                    borderColor: category.color,
-                    backgroundColor: 'transparent',
-                    borderWidth: 1.6,
-                    borderDash: [],
-                    pointRadius: 0,
-                    pointHoverRadius: 3,
-                    tension: 0,
-                    fill: false,
-                    spanGaps: false
+                    borderColor: category.color, backgroundColor: 'transparent', borderWidth: 1.6,
+                    borderDash: [], pointRadius: 0, pointHoverRadius: 3, tension: 0, fill: false
                 });
                 datasets.push({
-                    label: `${category.label} – Last 50 %`,
+                    key: `${category.key}|rolling`,
+                    label: `${category.label} – ${rollingLabel}`,
                     data: rolling[category.key],
-                    borderColor: category.color,
-                    backgroundColor: 'transparent',
-                    borderWidth: 1.6,
-                    borderDash: [2, 4],
-                    pointRadius: 0,
-                    pointHoverRadius: 3,
-                    tension: 0,
-                    fill: false,
-                    spanGaps: false
+                    borderColor: category.color, backgroundColor: 'transparent', borderWidth: 1.6,
+                    borderDash: [2, 4], pointRadius: 0, pointHoverRadius: 3, tension: 0, fill: false
                 });
             }
             return { labels, datasets };
@@ -686,70 +708,79 @@
             const canvas = document.getElementById('streakProbabilityChart');
             if (!canvas || streakProbabilityChart) return;
             streakProbabilityChart = new Chart(canvas.getContext('2d'), {
-                type: 'line',
-                data: { labels: [], datasets: [] },
+                type: 'line', data: { labels: [], datasets: [] },
                 options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    animation: false,
+                    responsive: true, maintainAspectRatio: false, animation: false,
                     interaction: { mode: 'nearest', intersect: false },
                     plugins: {
                         legend: {
-                            display: true,
-                            position: 'bottom',
+                            display: true, position: 'bottom',
                             labels: { color: '#c9d1d9', boxWidth: 18, boxHeight: 2, padding: 8, font: { size: 9 } },
                             onClick: (event, legendItem, legend) => {
+                                const chart = legend.chart;
                                 const index = legendItem.datasetIndex;
-                                const dataset = legend.chart.data.datasets[index];
-                                const nextVisible = !legend.chart.isDatasetVisible(index);
-                                streakLineVisibility[dataset.label] = nextVisible;
-                                legend.chart.setDatasetVisibility(index, nextVisible);
-                                legend.chart.update('none');
+                                const dataset = chart.data.datasets[index];
+                                const visible = !chart.isDatasetVisible(index);
+                                streakLineVisibility[dataset.key] = visible;
+                                try { localStorage.setItem('streakLineVisibility', JSON.stringify(streakLineVisibility)); } catch (_) {}
+                                chart.setDatasetVisibility(index, visible);
+                                // Recalculate the Y axis from the lines that remain visible.
+                                streakYZoomFactor = 1;
+                                updateStreakYAxis();
+                                chart.update('none');
                             }
                         },
-                        tooltip: {
-                            callbacks: { label: context => `${context.dataset.label}: ${Number(context.parsed.y).toFixed(2)}%` }
-                        }
+                        tooltip: { callbacks: { label: context => `${context.dataset.label}: ${Number(context.parsed.y).toFixed(2)}%` } }
                     },
                     scales: {
                         x: {
                             title: { display: true, text: 'Streak Occurrence', color: '#c9d1d9', font: { size: 9 } },
-                            grid: { color: '#30363d' },
-                            ticks: { color: '#8b949e', maxTicksLimit: 12, font: { size: 8 } }
+                            grid: { color: '#30363d' }, ticks: { color: '#8b949e', maxTicksLimit: 12, font: { size: 8 } }
                         },
                         y: {
-                            min: 0,
-                            max: 100,
                             title: { display: true, text: 'Percentage (%)', color: '#c9d1d9', font: { size: 9 } },
-                            grid: { color: '#30363d' },
-                            ticks: { color: '#8b949e', callback: value => value + '%', font: { size: 8 } }
+                            grid: { color: '#30363d' }, ticks: { color: '#8b949e', callback: value => Number(value).toFixed(1) + '%', font: { size: 8 } }
                         }
                     }
                 }
             });
         }
 
+        function applyStreakSettings() {
+            const input = Number(document.getElementById('streakThreshold').value);
+            if (!Number.isFinite(input) || input <= 0) {
+                alert('Please enter a value greater than 0.');
+                return;
+            }
+            streakThresholdValue = input;
+            streakRollingMode = document.getElementById('streakRollingMode').value;
+            streakWindowSize = STREAK_DEFAULT_WINDOW_SIZE;
+            streakHasZoomed = false;
+            streakCurrentStart = Number.MAX_SAFE_INTEGER;
+            streakYZoomFactor = 1;
+            document.getElementById('streakChartTitle').textContent = `Streak Probability (below ${streakThresholdValue}x)`;
+            updateStreakProbabilityChart();
+        }
+
         function updateStreakProbabilityChart() {
             initStreakProbabilityChart();
             if (!streakProbabilityChart) return;
-            const previousTotal = streakChartAllLabels.length;
-            const previousMaxStart = Math.max(1, previousTotal - streakWindowSize + 1);
-            const wasAtNewest = streakCurrentStart >= previousMaxStart;
-            const events = getCompletedBelow2xStreaks(globalData);
+            const oldTotal = streakChartAllLabels.length;
+            const oldMaxStart = Math.max(1, oldTotal - streakWindowSize + 1);
+            const wasAtNewest = streakCurrentStart >= oldMaxStart;
+            const events = getCompletedStreakEvents(globalData, streakThresholdValue);
+            if (!streakHasZoomed) streakWindowSize = Math.max(1, Math.min(STREAK_DEFAULT_WINDOW_SIZE, events.length || 1));
             const built = buildStreakProbabilityDatasets(events);
             streakChartAllLabels = built.labels;
             streakChartAllDatasets = built.datasets.map(dataset => ({
                 ...dataset,
-                hidden: streakLineVisibility[dataset.label] === false
+                hidden: streakLineVisibility[dataset.key] === false
             }));
 
+            const maxStart = Math.max(1, events.length - streakWindowSize + 1);
+            streakCurrentStart = wasAtNewest ? maxStart : Math.min(streakCurrentStart, maxStart);
             const slider = document.getElementById('streakScroll');
-            const oldMaxStart = Math.max(1, events.length - streakWindowSize + 1);
-            // Follow the newest events when the slider was already at the newest edge.
-            streakCurrentStart = wasAtNewest ? oldMaxStart : Math.min(streakCurrentStart, oldMaxStart);
-            slider.min = 1;
-            slider.max = oldMaxStart;
-            slider.value = streakCurrentStart;
+            slider.min = 1; slider.max = maxStart; slider.value = streakCurrentStart;
             slider.disabled = events.length <= streakWindowSize;
             document.getElementById('streakChartStatus').textContent = `${events.length} completed streak events`;
             renderStreakChartWindow(streakCurrentStart);
@@ -763,22 +794,53 @@
         function zoomStreakChart(factor) {
             const total = streakChartAllLabels.length;
             if (!total) return;
-            const oldSize = streakWindowSize;
-            const newSize = Math.max(STREAK_MIN_WINDOW_SIZE, Math.min(total || STREAK_DEFAULT_WINDOW_SIZE, Math.round(oldSize * factor)));
-            if (newSize === oldSize) return;
-            // Keep the current right edge anchored while zooming.
-            const oldEnd = streakCurrentStart + oldSize - 1;
-            streakWindowSize = newSize;
+            const oldEnd = streakCurrentStart + streakWindowSize - 1;
+            streakHasZoomed = true;
+            streakWindowSize = Math.max(STREAK_MIN_WINDOW_SIZE, Math.min(total, Math.round(streakWindowSize * factor)));
             const maxStart = Math.max(1, total - streakWindowSize + 1);
             streakCurrentStart = Math.max(1, Math.min(maxStart, oldEnd - streakWindowSize + 1));
+            streakYZoomFactor = Math.max(0.15, Math.min(8, streakYZoomFactor * factor));
             renderStreakChartWindow(streakCurrentStart);
         }
 
         function resetStreakChartZoom() {
-            streakWindowSize = Math.min(STREAK_DEFAULT_WINDOW_SIZE, Math.max(STREAK_MIN_WINDOW_SIZE, streakChartAllLabels.length || STREAK_DEFAULT_WINDOW_SIZE));
-            const total = streakChartAllLabels.length;
-            streakCurrentStart = Math.max(1, total - streakWindowSize + 1);
+            streakHasZoomed = false;
+            streakWindowSize = Math.min(STREAK_DEFAULT_WINDOW_SIZE, Math.max(1, streakChartAllLabels.length));
+            streakCurrentStart = Math.max(1, streakChartAllLabels.length - streakWindowSize + 1);
+            streakYZoomFactor = 1;
             renderStreakChartWindow(streakCurrentStart);
+        }
+
+        function updateStreakYAxis() {
+            if (!streakProbabilityChart) return;
+            const start = Math.max(0, streakCurrentStart - 1);
+            const end = Math.min(streakChartAllLabels.length, start + streakWindowSize);
+            const visibleValues = [];
+            streakChartAllDatasets.forEach((dataset, index) => {
+                if (streakLineVisibility[dataset.key] === false) return;
+                for (let i = start; i < end; i++) {
+                    const value = dataset.data[i];
+                    if (Number.isFinite(value)) visibleValues.push(value);
+                }
+            });
+            if (!visibleValues.length) {
+                streakProbabilityChart.options.scales.y.min = 0;
+                streakProbabilityChart.options.scales.y.max = 1;
+                return;
+            }
+            let low = Math.min(...visibleValues);
+            let high = Math.max(...visibleValues);
+            const range = Math.max(high - low, Math.max(high, 1) * 0.08);
+            const padding = range * 0.08;
+            low = Math.max(0, low - padding);
+            high = Math.min(100, high + padding);
+            const center = (low + high) / 2;
+            const half = Math.max((high - low) / 2 / streakYZoomFactor, 0.05);
+            streakProbabilityChart.options.scales.y.min = Math.max(0, center - half);
+            streakProbabilityChart.options.scales.y.max = Math.min(100, center + half);
+            if (streakProbabilityChart.options.scales.y.max <= streakProbabilityChart.options.scales.y.min) {
+                streakProbabilityChart.options.scales.y.max = streakProbabilityChart.options.scales.y.min + 1;
+            }
         }
 
         function renderStreakChartWindow(startValue) {
@@ -791,14 +853,15 @@
             streakProbabilityChart.data.labels = streakChartAllLabels.slice(start, end);
             streakProbabilityChart.data.datasets = streakChartAllDatasets.map(dataset => ({
                 ...dataset,
-                hidden: streakLineVisibility[dataset.label] === false,
+                hidden: streakLineVisibility[dataset.key] === false,
                 data: dataset.data.slice(start, end)
             }));
+            streakProbabilityChart.options.scales.x.min = 0;
+            streakProbabilityChart.options.scales.x.max = Math.max(1, end - start - 1);
+            updateStreakYAxis();
             streakProbabilityChart.update('none');
             const slider = document.getElementById('streakScroll');
-            slider.max = maxStart;
-            slider.value = streakCurrentStart;
-            slider.disabled = total <= streakWindowSize;
+            slider.max = maxStart; slider.value = streakCurrentStart; slider.disabled = total <= streakWindowSize;
             document.getElementById('streakScrollLabel').textContent = total ? `${start + 1}–${end} / ${total}` : '0 events';
         }
 
