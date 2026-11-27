@@ -558,13 +558,18 @@
                 labels: [], 
                 datasets: [
                     { label: 'Ratio Trend', data: [], borderColor: '#3fb950', backgroundColor: 'rgba(63, 185, 80, 0.1)', fill: true, tension: 0.1 },
-                    { label: 'Target', data: [], borderColor: '#f85149', borderDash: [5, 5], borderWidth: 1.5, fill: false, pointRadius: 0 }
+                    { label: 'Target', data: [], borderColor: '#f85149', borderDash: [5, 5], borderWidth: 1.5, fill: false, pointRadius: 0 },
+                    { label: 'Next 50 Rounds: 2x+ (%)', data: [], borderColor: '#f0b429', backgroundColor: 'rgba(240, 180, 41, 0.08)', borderDash: [7, 3], borderWidth: 2, fill: false, tension: 0.15, pointRadius: 2, pointHoverRadius: 5, spanGaps: false, yAxisID: 'y1' }
                 ] 
             },
             options: { 
                 responsive: true, 
                 maintainAspectRatio: false, 
-                scales: { x: { grid: { color: '#30363d' }, ticks: { font: { size: 9 } } }, y: { grid: { color: '#30363d' }, ticks: { font: { size: 9 } } } }, 
+                scales: {
+                    x: { grid: { color: '#30363d' }, ticks: { font: { size: 9 } } },
+                    y: { type: 'linear', position: 'left', grid: { color: '#30363d' }, ticks: { font: { size: 9 } }, title: { display: true, text: 'Ratio', color: '#3fb950', font: { size: 9 } } },
+                    y1: { type: 'linear', position: 'right', min: 0, max: 100, grid: { drawOnChartArea: false }, ticks: { font: { size: 9 }, callback: value => value + '%' }, title: { display: true, text: '2x+ in next 50 rounds', color: '#f0b429', font: { size: 9 } } }
+                },
                 plugins: { legend: { display: true, labels: { color: '#c9d1d9', font: { size: 10 }, boxWidth: 12 } } } 
             }
         });
@@ -580,6 +585,7 @@
             let trendValues = [];
             let ratioValues = [];
             let targetValues = [];
+            let next50TwoPlusPercent = [];
 
             for (let i = startIndex; i < totalData; i++) {
                 let actualRoundNumber = i + 1; 
@@ -594,6 +600,20 @@
                 
                 ratioValues.push(currentRatio);
                 targetValues.push(selectedRange.target);
+
+                // At each occurrence of the selected range, measure the next 50
+                // chronological rounds (not the current round) and plot the 2x+ rate.
+                const isSelectedOccurrence = selectedRange.type === 'lt'
+                    ? chronoData[i] < selectedRange.threshold
+                    : chronoData[i] >= selectedRange.threshold;
+                if (isSelectedOccurrence && i + 50 < totalData) {
+                    const next50 = chronoData.slice(i + 1, i + 51);
+                    const twoPlusCount = next50.filter(v => v >= 2).length;
+                    next50TwoPlusPercent.push((twoPlusCount / 50) * 100);
+                } else {
+                    // No point for non-matching rounds or incomplete future windows.
+                    next50TwoPlusPercent.push(null);
+                }
             }
 
             trendChart.data.labels = labels; 
@@ -605,6 +625,8 @@
             ratioChart.data.datasets[0].label = `Ratio Trend (${selectedRange.label})`;
             ratioChart.data.datasets[1].data = targetValues;
             ratioChart.data.datasets[1].label = `Target (${selectedRange.target})`;
+            ratioChart.data.datasets[2].data = next50TwoPlusPercent;
+            ratioChart.data.datasets[2].label = `Next 50 Rounds: 2x+ (%) after ${selectedRange.label}`;
             ratioChart.update();
         }
 
