@@ -116,7 +116,9 @@
         .streak-chart-tools { display:flex; align-items:center; gap:5px; }
         .streak-chart-tools button { background:#21262d; color:#c9d1d9; border:1px solid #48515c; border-radius:3px; padding:2px 8px; font-size:11px; cursor:pointer; }
         .streak-chart-tools button:hover { background:#30363d; color:#fff; }
-        .streak-chart-canvas { position:relative; flex:1; min-height:100px; width:100%; }
+        .streak-chart-canvas { position:relative; flex:1; min-height:100px; width:100%; display:flex; min-width:0; }
+        .streak-chart-canvas canvas { min-width:0; }
+        .streak-y-scroll { width:18px; flex:0 0 18px; accent-color:#58a6ff; writing-mode:vertical-lr; direction:rtl; cursor:ns-resize; }
         .streak-scroll-wrap { display:flex; align-items:center; gap:8px; color:#8b949e; font-size:9px; }
         .streak-scroll-wrap input { flex:1; min-width:50px; accent-color:#58a6ff; height:14px; }
         .streak-scroll-wrap span { white-space:nowrap; }
@@ -248,7 +250,7 @@
                         <span id="streakChartStatus">Waiting for data</span>
                     </div>
                 </div>
-                <div class="streak-chart-canvas"><canvas id="streakProbabilityChart"></canvas></div>
+                <div class="streak-chart-canvas"><canvas id="streakProbabilityChart"></canvas><input id="streakYScroll" class="streak-y-scroll" type="range" min="-100" max="100" step="1" value="0" orient="vertical" title="Scroll chart up / down" oninput="scrollStreakChartY(this.value)"></div>
                 <div class="streak-scroll-wrap">
                     <span>Older</span>
                     <input id="streakScroll" type="range" min="1" max="1" value="1" disabled oninput="scrollStreakChart(this.value)">
@@ -613,6 +615,7 @@
         let streakWindowSize = STREAK_DEFAULT_WINDOW_SIZE;
         let streakCurrentStart = 1;
         let streakYZoomFactor = 1;
+        let streakYPan = 0;
         let streakHasZoomed = false;
         let streakThresholdValue = 2;
         let streakRollingMode = 'streaks';
@@ -622,9 +625,7 @@
             { key: '1', label: 'Streak 1', color: '#3b82f6' },
             { key: '2', label: 'Streak 2', color: '#06b6d4' },
             { key: '3', label: 'Streak 3', color: '#16a34a' },
-            { key: '4', label: 'Streak 4', color: '#eab308' },
-            { key: '5', label: 'Streak 5', color: '#f97316' },
-            { key: '6+', label: 'Streak 6+', color: '#dc2626' }
+            { key: '4+', label: 'Streak 4+', color: '#eab308' }
         ];
         let streakProbabilityChart = null;
         let streakChartAllLabels = [];
@@ -665,7 +666,7 @@
             const rollingLabel = streakRollingMode === 'rounds' ? 'Last 50 Rounds %' : 'Last 50 Streaks %';
 
             for (let i = 0; i < events.length; i++) {
-                const eventKey = events[i].length >= 6 ? '6+' : String(events[i].length);
+                const eventKey = events[i].length >= 4 ? '4+' : String(events[i].length);
                 counts[eventKey]++;
                 for (const key of keys) {
                     overall[key].push((counts[key] / (i + 1)) * 100);
@@ -674,12 +675,12 @@
                     if (streakRollingMode === 'rounds') {
                         const firstRoundInWindow = events[i].endRound - (STREAK_ROLLING_COUNT - 1);
                         while (rollingStart <= i && events[rollingStart].endRound < firstRoundInWindow) {
-                            const removedKey = events[rollingStart].length >= 6 ? '6+' : String(events[rollingStart].length);
+                            const removedKey = events[rollingStart].length >= 4 ? '4+' : String(events[rollingStart].length);
                             rollingCounts[removedKey]--;
                             rollingStart++;
                         }
                         // Add current event to the rolling 50-round bucket.
-                        const currentKey = events[i].length >= 6 ? '6+' : String(events[i].length);
+                        const currentKey = events[i].length >= 4 ? '4+' : String(events[i].length);
                         rollingCounts[currentKey]++;
                         windowLength = i - rollingStart + 1;
                         windowCount = rollingCounts[key];
@@ -688,7 +689,7 @@
                         windowLength = i - firstEvent + 1;
                         windowCount = 0;
                         for (let j = firstEvent; j <= i; j++) {
-                            const candidateKey = events[j].length >= 6 ? '6+' : String(events[j].length);
+                            const candidateKey = events[j].length >= 4 ? '4+' : String(events[j].length);
                             if (candidateKey === key) windowCount++;
                         }
                     }
@@ -770,6 +771,8 @@
             streakHasZoomed = false;
             streakCurrentStart = Number.MAX_SAFE_INTEGER;
             streakYZoomFactor = 1;
+            streakYPan = 0;
+            const yScroll = document.getElementById('streakYScroll'); if (yScroll) yScroll.value = 0;
             document.getElementById('streakChartTitle').textContent = `Streak Probability (below ${streakThresholdValue}x)`;
             updateStreakProbabilityChart();
         }
@@ -824,6 +827,8 @@
             streakWindowSize = Math.min(STREAK_DEFAULT_WINDOW_SIZE, Math.max(1, streakChartAllLabels.length));
             streakCurrentStart = Math.max(1, streakChartAllLabels.length - streakWindowSize + 1);
             streakYZoomFactor = 1;
+            streakYPan = 0;
+            const yScroll = document.getElementById('streakYScroll'); if (yScroll) yScroll.value = 0;
             renderStreakChartWindow(streakCurrentStart);
         }
 
@@ -850,13 +855,20 @@
             const padding = range * 0.08;
             low = Math.max(0, low - padding);
             high = Math.min(100, high + padding);
-            const center = (low + high) / 2;
+            const baseCenter = (low + high) / 2;
             const half = Math.max((high - low) / 2 / streakYZoomFactor, 0.05);
+            const center = baseCenter + (streakYPan / 100) * Math.max(half * 2, 1) * 2;
             streakProbabilityChart.options.scales.y.min = Math.max(0, center - half);
             streakProbabilityChart.options.scales.y.max = Math.min(100, center + half);
             if (streakProbabilityChart.options.scales.y.max <= streakProbabilityChart.options.scales.y.min) {
                 streakProbabilityChart.options.scales.y.max = streakProbabilityChart.options.scales.y.min + 1;
             }
+        }
+
+        function scrollStreakChartY(value) {
+            streakYPan = Number(value) || 0;
+            updateStreakYAxis();
+            if (streakProbabilityChart) streakProbabilityChart.update('none');
         }
 
         function renderStreakChartWindow(startValue) {
