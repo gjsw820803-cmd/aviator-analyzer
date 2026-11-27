@@ -621,38 +621,67 @@
             updateCharts();
         }
 
+        // Find newly prepended rounds using the longest overlap. Comparing the
+        // full sequence (not just unique values) preserves repeated multipliers.
         function extractNewValues(currentPayload, lastPayload) {
-            if (!lastPayload || lastPayload.length === 0) return [];
-            let matchIndex = -1;
-            for (let i = 0; i < currentPayload.length; i++) {
-                let match = true;
-                let checkLength = Math.min(3, lastPayload.length, currentPayload.length - i);
-                if (checkLength === 0) break;
-                for (let j = 0; j < checkLength; j++) {
-                    if (currentPayload[i + j] !== lastPayload[j]) { match = false; break; }
+            if (!Array.isArray(currentPayload) || currentPayload.length === 0) return [];
+            if (!Array.isArray(lastPayload) || lastPayload.length === 0) return currentPayload.slice();
+
+            let bestOffset = -1;
+            let bestOverlap = 0;
+            const maxOffset = Math.min(currentPayload.length - 1, 100);
+
+            for (let offset = 0; offset <= maxOffset; offset++) {
+                let overlap = 0;
+                const limit = Math.min(currentPayload.length - offset, lastPayload.length);
+                while (overlap < limit && Number(currentPayload[offset + overlap]) === Number(lastPayload[overlap])) {
+                    overlap++;
                 }
-                if (match) { matchIndex = i; break; }
+                if (overlap > bestOverlap) {
+                    bestOverlap = overlap;
+                    bestOffset = offset;
+                }
             }
-            if (matchIndex > 0) return currentPayload.slice(0, matchIndex);
-            return [];
+
+            return (bestOffset > 0 && bestOverlap > 0)
+                ? currentPayload.slice(0, bestOffset)
+                : [];
         }
 
         window.addEventListener('message', function(event) {
-            if (!isSyncActive) return; 
-            if (event.data && event.data.type === 'AVIATOR_DATA_SYNC') {
-                let incoming = event.data.payload;
-                if (!incoming || incoming.length === 0) return;
-                if (needsBaseline || !lastKnownPayload) {
-                    lastKnownPayload = incoming;
+            if (!isSyncActive) return;
+            if (event.source !== window.opener) return;
+            if (!event.data || event.data.type !== 'AVIATOR_DATA_SYNC') return;
+
+            const incoming = Array.isArray(event.data.payload)
+                ? event.data.payload.map(Number).filter(v => Number.isFinite(v) && v > 0)
+                : [];
+            if (incoming.length === 0) return;
+
+            // First snapshot: populate an empty Analyzer immediately instead of
+            // waiting for the next game round.
+            if (needsBaseline || !lastKnownPayload) {
+                if (globalData.length === 0) {
+                    lastKnownPayload = incoming.slice();
                     needsBaseline = false;
-                    return; 
+                    renderData(incoming.slice());
+                    return;
                 }
-                let newItems = extractNewValues(incoming, lastKnownPayload);
-                if (newItems.length > 0) {
-                    lastKnownPayload = incoming;
-                    let updatedData = newItems.concat(globalData);
-                    renderData(updatedData);
+
+                const initialNewItems = extractNewValues(incoming, globalData);
+                lastKnownPayload = incoming.slice();
+                needsBaseline = false;
+                if (initialNewItems.length > 0) {
+                    renderData(initialNewItems.concat(globalData));
                 }
+                return;
+            }
+
+            const newItems = extractNewValues(incoming, lastKnownPayload);
+            lastKnownPayload = incoming.slice();
+
+            if (newItems.length > 0) {
+                renderData(newItems.concat(globalData));
             }
         });
 
