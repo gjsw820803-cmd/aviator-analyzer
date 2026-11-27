@@ -102,6 +102,9 @@
         .streak-chart-wrap { display:flex; flex-direction:column; flex:1; min-height:0; gap:4px; }
         .streak-chart-heading { display:flex; justify-content:space-between; align-items:center; gap:8px; color:#c9d1d9; font-size:10px; }
         .streak-chart-heading strong { color:#fff; font-size:11px; }
+        .streak-chart-tools { display:flex; align-items:center; gap:5px; }
+        .streak-chart-tools button { background:#21262d; color:#c9d1d9; border:1px solid #48515c; border-radius:3px; padding:2px 8px; font-size:11px; cursor:pointer; }
+        .streak-chart-tools button:hover { background:#30363d; color:#fff; }
         .streak-chart-canvas { position:relative; flex:1; min-height:100px; width:100%; }
         .streak-scroll-wrap { display:flex; align-items:center; gap:8px; color:#8b949e; font-size:9px; }
         .streak-scroll-wrap input { flex:1; min-width:50px; accent-color:#58a6ff; height:14px; }
@@ -219,7 +222,12 @@
             <div class="streak-chart-wrap">
                 <div class="streak-chart-heading">
                     <strong>Below 2x Streak Probability</strong>
-                    <span id="streakChartStatus">Waiting for data</span>
+                    <div class="streak-chart-tools">
+                        <button type="button" onclick="zoomStreakChart(0.7)" title="Zoom in">＋</button>
+                        <button type="button" onclick="zoomStreakChart(1.4)" title="Zoom out">－</button>
+                        <button type="button" onclick="resetStreakChartZoom()" title="Reset zoom">Reset</button>
+                        <span id="streakChartStatus">Waiting for data</span>
+                    </div>
                 </div>
                 <div class="streak-chart-canvas"><canvas id="streakProbabilityChart"></canvas></div>
                 <div class="streak-scroll-wrap">
@@ -580,7 +588,11 @@
         }
 
         // --- Below-2x streak probability chart (one chart, 12 independently toggleable lines) ---
-        const STREAK_WINDOW_SIZE = 200;
+        const STREAK_DEFAULT_WINDOW_SIZE = 200;
+        const STREAK_MIN_WINDOW_SIZE = 10;
+        let streakWindowSize = STREAK_DEFAULT_WINDOW_SIZE;
+        let streakCurrentStart = 1;
+        const streakLineVisibility = Object.create(null);
         const streakCategories = [
             { key: '1', label: 'Streak 1', color: '#3b82f6' },
             { key: '2', label: 'Streak 2', color: '#06b6d4' },
@@ -685,7 +697,15 @@
                         legend: {
                             display: true,
                             position: 'bottom',
-                            labels: { color: '#c9d1d9', boxWidth: 18, boxHeight: 2, padding: 8, font: { size: 9 } }
+                            labels: { color: '#c9d1d9', boxWidth: 18, boxHeight: 2, padding: 8, font: { size: 9 } },
+                            onClick: (event, legendItem, legend) => {
+                                const index = legendItem.datasetIndex;
+                                const dataset = legend.chart.data.datasets[index];
+                                const nextVisible = !legend.chart.isDatasetVisible(index);
+                                streakLineVisibility[dataset.label] = nextVisible;
+                                legend.chart.setDatasetVisibility(index, nextVisible);
+                                legend.chart.update('none');
+                            }
                         },
                         tooltip: {
                             callbacks: { label: context => `${context.dataset.label}: ${Number(context.parsed.y).toFixed(2)}%` }
@@ -712,36 +732,73 @@
         function updateStreakProbabilityChart() {
             initStreakProbabilityChart();
             if (!streakProbabilityChart) return;
+            const previousTotal = streakChartAllLabels.length;
+            const previousMaxStart = Math.max(1, previousTotal - streakWindowSize + 1);
+            const wasAtNewest = streakCurrentStart >= previousMaxStart;
             const events = getCompletedBelow2xStreaks(globalData);
             const built = buildStreakProbabilityDatasets(events);
             streakChartAllLabels = built.labels;
-            streakChartAllDatasets = built.datasets;
+            streakChartAllDatasets = built.datasets.map(dataset => ({
+                ...dataset,
+                hidden: streakLineVisibility[dataset.label] === false
+            }));
 
             const slider = document.getElementById('streakScroll');
-            const maxStart = Math.max(1, events.length - STREAK_WINDOW_SIZE + 1);
+            const oldMaxStart = Math.max(1, events.length - streakWindowSize + 1);
+            // Follow the newest events when the slider was already at the newest edge.
+            streakCurrentStart = wasAtNewest ? oldMaxStart : Math.min(streakCurrentStart, oldMaxStart);
             slider.min = 1;
-            slider.max = maxStart;
-            slider.value = maxStart;
-            slider.disabled = events.length <= STREAK_WINDOW_SIZE;
+            slider.max = oldMaxStart;
+            slider.value = streakCurrentStart;
+            slider.disabled = events.length <= streakWindowSize;
             document.getElementById('streakChartStatus').textContent = `${events.length} completed streak events`;
-            renderStreakChartWindow(maxStart);
+            renderStreakChartWindow(streakCurrentStart);
         }
 
         function scrollStreakChart(startValue) {
-            renderStreakChartWindow(Number(startValue));
+            streakCurrentStart = Number(startValue);
+            renderStreakChartWindow(streakCurrentStart);
+        }
+
+        function zoomStreakChart(factor) {
+            const total = streakChartAllLabels.length;
+            if (!total) return;
+            const oldSize = streakWindowSize;
+            const newSize = Math.max(STREAK_MIN_WINDOW_SIZE, Math.min(total || STREAK_DEFAULT_WINDOW_SIZE, Math.round(oldSize * factor)));
+            if (newSize === oldSize) return;
+            // Keep the current right edge anchored while zooming.
+            const oldEnd = streakCurrentStart + oldSize - 1;
+            streakWindowSize = newSize;
+            const maxStart = Math.max(1, total - streakWindowSize + 1);
+            streakCurrentStart = Math.max(1, Math.min(maxStart, oldEnd - streakWindowSize + 1));
+            renderStreakChartWindow(streakCurrentStart);
+        }
+
+        function resetStreakChartZoom() {
+            streakWindowSize = Math.min(STREAK_DEFAULT_WINDOW_SIZE, Math.max(STREAK_MIN_WINDOW_SIZE, streakChartAllLabels.length || STREAK_DEFAULT_WINDOW_SIZE));
+            const total = streakChartAllLabels.length;
+            streakCurrentStart = Math.max(1, total - streakWindowSize + 1);
+            renderStreakChartWindow(streakCurrentStart);
         }
 
         function renderStreakChartWindow(startValue) {
             if (!streakProbabilityChart) return;
             const total = streakChartAllLabels.length;
-            const start = Math.max(0, Math.min(total, Number(startValue) - 1));
-            const end = Math.min(total, start + STREAK_WINDOW_SIZE);
+            const maxStart = Math.max(1, total - streakWindowSize + 1);
+            const start = Math.max(0, Math.min(maxStart - 1, Number(startValue) - 1));
+            const end = Math.min(total, start + streakWindowSize);
+            streakCurrentStart = start + 1;
             streakProbabilityChart.data.labels = streakChartAllLabels.slice(start, end);
             streakProbabilityChart.data.datasets = streakChartAllDatasets.map(dataset => ({
                 ...dataset,
+                hidden: streakLineVisibility[dataset.label] === false,
                 data: dataset.data.slice(start, end)
             }));
             streakProbabilityChart.update('none');
+            const slider = document.getElementById('streakScroll');
+            slider.max = maxStart;
+            slider.value = streakCurrentStart;
+            slider.disabled = total <= streakWindowSize;
             document.getElementById('streakScrollLabel').textContent = total ? `${start + 1}–${end} / ${total}` : '0 events';
         }
 
