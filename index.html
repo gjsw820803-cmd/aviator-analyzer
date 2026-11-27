@@ -98,6 +98,15 @@
         .chart-view-section.active { display: flex; flex-direction: column; }
         select.scope-select { background: #21262d; color: #fff; border: 1px solid #30363d; padding: 2px 4px; border-radius: 4px; font-size: 10px; }
 
+        /* Streak probability chart */
+        .streak-chart-wrap { display:flex; flex-direction:column; flex:1; min-height:0; gap:4px; }
+        .streak-chart-heading { display:flex; justify-content:space-between; align-items:center; gap:8px; color:#c9d1d9; font-size:10px; }
+        .streak-chart-heading strong { color:#fff; font-size:11px; }
+        .streak-chart-canvas { position:relative; flex:1; min-height:100px; width:100%; }
+        .streak-scroll-wrap { display:flex; align-items:center; gap:8px; color:#8b949e; font-size:9px; }
+        .streak-scroll-wrap input { flex:1; min-width:50px; accent-color:#58a6ff; height:14px; }
+        .streak-scroll-wrap span { white-space:nowrap; }
+
         /* Rules Form Styles */
         .rules-form {
             display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px;
@@ -130,6 +139,7 @@
             <button class="tab-btn" onclick="switchChartTab(event, 'rulesView')">⚙️ Rules</button>
             <button class="tab-btn active" onclick="switchChartTab(event, 'valueChartView')">Value Chart</button>
             <button class="tab-btn" onclick="switchChartTab(event, 'ratioChartView')">Ratio Chart</button>
+            <button class="tab-btn" onclick="switchChartTab(event, 'streakChartView')">Streak Probability</button>
             <label class="tab-btn upload-btn" title="Upload CSV Data">
                 📁 CSV <input type="file" id="csvFileInput" accept=".csv, .txt" style="display: none;" onchange="handleCSVUpload(event)">
             </label>
@@ -203,6 +213,23 @@
         <div id="ratioChartView" class="chart-view-section">
             <canvas id="ratioChart"></canvas>
         </div>
+
+        <!-- Streak Probability Chart: single approved chart only -->
+        <div id="streakChartView" class="chart-view-section">
+            <div class="streak-chart-wrap">
+                <div class="streak-chart-heading">
+                    <strong>Below 2x Streak Probability</strong>
+                    <span id="streakChartStatus">Waiting for data</span>
+                </div>
+                <div class="streak-chart-canvas"><canvas id="streakProbabilityChart"></canvas></div>
+                <div class="streak-scroll-wrap">
+                    <span>Older</span>
+                    <input id="streakScroll" type="range" min="1" max="1" value="1" disabled oninput="scrollStreakChart(this.value)">
+                    <span>Newer</span>
+                    <span id="streakScrollLabel">0 events</span>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -217,6 +244,7 @@
             document.getElementById(viewId).classList.add('active');
             evt.currentTarget.classList.add('active');
             if(viewId === 'valueChartView' || viewId === 'ratioChartView') updateCharts();
+            if(viewId === 'streakChartView') updateStreakProbabilityChart();
             if(viewId === 'rulesView') renderRules();
         }
 
@@ -551,6 +579,172 @@
             ratioChart.update();
         }
 
+        // --- Below-2x streak probability chart (one chart, 12 independently toggleable lines) ---
+        const STREAK_WINDOW_SIZE = 200;
+        const streakCategories = [
+            { key: '1', label: 'Streak 1', color: '#3b82f6' },
+            { key: '2', label: 'Streak 2', color: '#06b6d4' },
+            { key: '3', label: 'Streak 3', color: '#16a34a' },
+            { key: '4', label: 'Streak 4', color: '#eab308' },
+            { key: '5', label: 'Streak 5', color: '#f97316' },
+            { key: '6+', label: 'Streak 6+', color: '#dc2626' }
+        ];
+        let streakProbabilityChart = null;
+        let streakChartAllLabels = [];
+        let streakChartAllDatasets = [];
+
+        function getCompletedBelow2xStreaks(values) {
+            // Analyzer stores latest-first; reverse to chronological order.
+            const chronological = values.slice().reverse().map(Number).filter(v => Number.isFinite(v) && v > 0);
+            const events = [];
+            let run = 0;
+            const oldestRoundIsBelow2x = chronological.length > 0 && chronological[0] < 2;
+            let firstRunClosed = false;
+            for (const value of chronological) {
+                if (value < 2) {
+                    run++;
+                } else if (run > 0) {
+                    // If the oldest recorded round is below 2x, that first run may be cut off
+                    // by the beginning of the captured history, so omit it like the approved sample analysis.
+                    if (!(oldestRoundIsBelow2x && !firstRunClosed)) events.push(run);
+                    firstRunClosed = true;
+                    run = 0;
+                }
+            }
+            // Do not include a run still open at the newest end: it is incomplete.
+            return events;
+        }
+
+        function buildStreakProbabilityDatasets(events) {
+            const keys = streakCategories.map(c => c.key);
+            const counts = Object.fromEntries(keys.map(k => [k, 0]));
+            const overall = Object.fromEntries(keys.map(k => [k, []]));
+            const rolling = Object.fromEntries(keys.map(k => [k, []]));
+            const labels = [];
+
+            for (let i = 0; i < events.length; i++) {
+                const key = events[i] >= 6 ? '6+' : String(events[i]);
+                counts[key]++;
+                labels.push(i + 1);
+                for (const k of keys) {
+                    overall[k].push((counts[k] / (i + 1)) * 100);
+                    const start = Math.max(0, i - 49);
+                    let windowCount = 0;
+                    for (let j = start; j <= i; j++) {
+                        const eventKey = events[j] >= 6 ? '6+' : String(events[j]);
+                        if (eventKey === k) windowCount++;
+                    }
+                    rolling[k].push((windowCount / (i - start + 1)) * 100);
+                }
+            }
+
+            const datasets = [];
+            for (const category of streakCategories) {
+                datasets.push({
+                    label: `${category.label} – Overall %`,
+                    data: overall[category.key],
+                    borderColor: category.color,
+                    backgroundColor: 'transparent',
+                    borderWidth: 1.6,
+                    borderDash: [],
+                    pointRadius: 0,
+                    pointHoverRadius: 3,
+                    tension: 0,
+                    fill: false,
+                    spanGaps: false
+                });
+                datasets.push({
+                    label: `${category.label} – Last 50 %`,
+                    data: rolling[category.key],
+                    borderColor: category.color,
+                    backgroundColor: 'transparent',
+                    borderWidth: 1.6,
+                    borderDash: [2, 4],
+                    pointRadius: 0,
+                    pointHoverRadius: 3,
+                    tension: 0,
+                    fill: false,
+                    spanGaps: false
+                });
+            }
+            return { labels, datasets };
+        }
+
+        function initStreakProbabilityChart() {
+            const canvas = document.getElementById('streakProbabilityChart');
+            if (!canvas || streakProbabilityChart) return;
+            streakProbabilityChart = new Chart(canvas.getContext('2d'), {
+                type: 'line',
+                data: { labels: [], datasets: [] },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    interaction: { mode: 'nearest', intersect: false },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'bottom',
+                            labels: { color: '#c9d1d9', boxWidth: 18, boxHeight: 2, padding: 8, font: { size: 9 } }
+                        },
+                        tooltip: {
+                            callbacks: { label: context => `${context.dataset.label}: ${Number(context.parsed.y).toFixed(2)}%` }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            title: { display: true, text: 'Streak Occurrence', color: '#c9d1d9', font: { size: 9 } },
+                            grid: { color: '#30363d' },
+                            ticks: { color: '#8b949e', maxTicksLimit: 12, font: { size: 8 } }
+                        },
+                        y: {
+                            min: 0,
+                            max: 100,
+                            title: { display: true, text: 'Percentage (%)', color: '#c9d1d9', font: { size: 9 } },
+                            grid: { color: '#30363d' },
+                            ticks: { color: '#8b949e', callback: value => value + '%', font: { size: 8 } }
+                        }
+                    }
+                }
+            });
+        }
+
+        function updateStreakProbabilityChart() {
+            initStreakProbabilityChart();
+            if (!streakProbabilityChart) return;
+            const events = getCompletedBelow2xStreaks(globalData);
+            const built = buildStreakProbabilityDatasets(events);
+            streakChartAllLabels = built.labels;
+            streakChartAllDatasets = built.datasets;
+
+            const slider = document.getElementById('streakScroll');
+            const maxStart = Math.max(1, events.length - STREAK_WINDOW_SIZE + 1);
+            slider.min = 1;
+            slider.max = maxStart;
+            slider.value = maxStart;
+            slider.disabled = events.length <= STREAK_WINDOW_SIZE;
+            document.getElementById('streakChartStatus').textContent = `${events.length} completed streak events`;
+            renderStreakChartWindow(maxStart);
+        }
+
+        function scrollStreakChart(startValue) {
+            renderStreakChartWindow(Number(startValue));
+        }
+
+        function renderStreakChartWindow(startValue) {
+            if (!streakProbabilityChart) return;
+            const total = streakChartAllLabels.length;
+            const start = Math.max(0, Math.min(total, Number(startValue) - 1));
+            const end = Math.min(total, start + STREAK_WINDOW_SIZE);
+            streakProbabilityChart.data.labels = streakChartAllLabels.slice(start, end);
+            streakProbabilityChart.data.datasets = streakChartAllDatasets.map(dataset => ({
+                ...dataset,
+                data: dataset.data.slice(start, end)
+            }));
+            streakProbabilityChart.update('none');
+            document.getElementById('streakScrollLabel').textContent = total ? `${start + 1}–${end} / ${total}` : '0 events';
+        }
+
         function handleCSVUpload(event) {
             const file = event.target.files[0]; if (!file) return;
             const reader = new FileReader();
@@ -629,6 +823,7 @@
             };
             document.getElementById('summaryResult').innerHTML = generateTableHTML(ranges.slice(0, mid)) + generateTableHTML(ranges.slice(mid));
             updateCharts();
+            updateStreakProbabilityChart();
         }
 
         function extractNewValues(currentPayload, lastPayload) {
