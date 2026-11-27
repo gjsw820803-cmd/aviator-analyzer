@@ -557,9 +557,8 @@
             data: { 
                 labels: [], 
                 datasets: [
-                    { label: 'Ratio Trend', data: [], borderColor: '#3fb950', backgroundColor: 'rgba(63, 185, 80, 0.1)', fill: true, tension: 0.1 },
-                    { label: 'Target', data: [], borderColor: '#f85149', borderDash: [5, 5], borderWidth: 1.5, fill: false, pointRadius: 0 },
-                    { label: 'Next 50 Rounds: 2x+ (%)', data: [], borderColor: '#f0b429', backgroundColor: 'rgba(240, 180, 41, 0.08)', borderDash: [7, 3], borderWidth: 2, fill: false, tension: 0.15, pointRadius: 2, pointHoverRadius: 5, spanGaps: false, yAxisID: 'y1' }
+                    { label: 'Next 50 Rounds: 2x+ Probability (%)', data: [], borderColor: '#3fb950', backgroundColor: 'rgba(63, 185, 80, 0.08)', fill: false, tension: 0.15, borderWidth: 2, pointRadius: 2, pointHoverRadius: 5, spanGaps: false },
+                    { label: 'Average 2x+ Probability (48.5%)', data: [], borderColor: '#f85149', borderDash: [7, 5], borderWidth: 2, fill: false, pointRadius: 0 }
                 ] 
             },
             options: { 
@@ -567,8 +566,7 @@
                 maintainAspectRatio: false, 
                 scales: {
                     x: { grid: { color: '#30363d' }, ticks: { font: { size: 9 } } },
-                    y: { type: 'linear', position: 'left', grid: { color: '#30363d' }, ticks: { font: { size: 9 } }, title: { display: true, text: 'Ratio', color: '#3fb950', font: { size: 9 } } },
-                    y1: { type: 'linear', position: 'right', min: 0, max: 100, grid: { drawOnChartArea: false }, ticks: { font: { size: 9 }, callback: value => value + '%' }, title: { display: true, text: '2x+ in next 50 rounds', color: '#f0b429', font: { size: 9 } } }
+                    y: { type: 'linear', position: 'left', min: 0, max: 100, grid: { color: '#30363d' }, ticks: { font: { size: 9 }, callback: value => value + '%' }, title: { display: true, text: 'Probability (%)', color: '#3fb950', font: { size: 9 } } }
                 },
                 plugins: { legend: { display: true, labels: { color: '#c9d1d9', font: { size: 10 }, boxWidth: 12 } } } 
             }
@@ -583,23 +581,16 @@
 
             let labels = [];
             let trendValues = [];
-            let ratioValues = [];
-            let targetValues = [];
             let next50TwoPlusPercent = [];
+            let averageProbabilityLine = [];
 
             for (let i = startIndex; i < totalData; i++) {
                 let actualRoundNumber = i + 1; 
                 labels.push(actualRoundNumber);
                 trendValues.push(chronoData[i]);
 
-                let windowStart = Math.max(0, i - scope + 1);
-                let windowData = chronoData.slice(windowStart, i + 1);
-                
-                let matched = windowData.filter(v => selectedRange.type === 'lt' ? v < selectedRange.threshold : v >= selectedRange.threshold).length;
-                let currentRatio = matched > 0 ? parseFloat((windowData.length / matched).toFixed(1)) : 0;
-                
-                ratioValues.push(currentRatio);
-                targetValues.push(selectedRange.target);
+                // Keep the chart percentage-only: the historical 2x+ average is the baseline.
+                averageProbabilityLine.push(48.5);
 
                 // At each occurrence of the selected range, measure the next 50
                 // chronological rounds (not the current round) and plot the 2x+ rate.
@@ -621,12 +612,10 @@
             trendChart.update();
 
             ratioChart.data.labels = labels; 
-            ratioChart.data.datasets[0].data = ratioValues;
-            ratioChart.data.datasets[0].label = `Ratio Trend (${selectedRange.label})`;
-            ratioChart.data.datasets[1].data = targetValues;
-            ratioChart.data.datasets[1].label = `Target (${selectedRange.target})`;
-            ratioChart.data.datasets[2].data = next50TwoPlusPercent;
-            ratioChart.data.datasets[2].label = `Next 50 Rounds: 2x+ (%) after ${selectedRange.label}`;
+            ratioChart.data.datasets[0].data = next50TwoPlusPercent;
+            ratioChart.data.datasets[0].label = `Next 50 Rounds: 2x+ Probability (%) after ${selectedRange.label}`;
+            ratioChart.data.datasets[1].data = averageProbabilityLine;
+            ratioChart.data.datasets[1].label = 'Average 2x+ Probability (48.5%)';
             ratioChart.update();
         }
 
