@@ -360,18 +360,28 @@
 
         // --- Core Application & Evaluation ---
         function clearData() {
-            if(confirm("Are you sure you want to clear ALL historical crash data?")) {
-                globalData = [];
-                localStorage.removeItem('crashDataList');
-                localStorage.removeItem('aviator_accumulated_crash_history');
-                isBettingActive = false;
-                isMaxRepeatBeeping = false;
-                needsBaseline = true; 
-                lastKnownPayload = null;
-                if (beepInterval) { clearInterval(beepInterval); beepInterval = null; }
-                updateUIStatus();
-                renderData(globalData);
+            if (!confirm("Are you sure you want to clear ALL historical crash data?")) return;
+
+            globalData = [];
+            localStorage.removeItem('crashDataList');
+            isBettingActive = false;
+            isMaxRepeatBeeping = false;
+            needsBaseline = false;
+            lastKnownPayload = [];
+
+            if (beepInterval) { clearInterval(beepInterval); beepInterval = null; }
+
+            // Clear the capture-side persistent history as well.
+            try {
+                if (window.opener && !window.opener.closed) {
+                    window.opener.postMessage({ type: 'AVIATOR_CLEAR_HISTORY' }, '*');
+                }
+            } catch (e) {
+                console.warn('[Analyzer] Could not request game history clear:', e);
             }
+
+            updateUIStatus();
+            renderData(globalData);
         }
 
         function updateUIStatus() {
@@ -621,11 +631,9 @@
             updateCharts();
         }
 
-        // Find newly prepended rounds using the longest overlap. Comparing the
-        // full sequence (not just unique values) preserves repeated multipliers.
         function extractNewValues(currentPayload, lastPayload) {
-            if (!Array.isArray(currentPayload) || currentPayload.length === 0) return [];
-            if (!Array.isArray(lastPayload) || lastPayload.length === 0) return currentPayload.slice();
+            if (!Array.isArray(currentPayload) || !currentPayload.length) return [];
+            if (!Array.isArray(lastPayload) || !lastPayload.length) return currentPayload.slice();
 
             let bestOffset = -1;
             let bestOverlap = 0;
@@ -634,7 +642,8 @@
             for (let offset = 0; offset <= maxOffset; offset++) {
                 let overlap = 0;
                 const limit = Math.min(currentPayload.length - offset, lastPayload.length);
-                while (overlap < limit && Number(currentPayload[offset + overlap]) === Number(lastPayload[overlap])) {
+                while (overlap < limit &&
+                    Number(currentPayload[offset + overlap]) === Number(lastPayload[overlap])) {
                     overlap++;
                 }
                 if (overlap > bestOverlap) {
@@ -643,46 +652,41 @@
                 }
             }
 
-            return (bestOffset > 0 && bestOverlap > 0)
+            return bestOffset > 0 && bestOverlap >= 1
                 ? currentPayload.slice(0, bestOffset)
                 : [];
         }
 
         window.addEventListener('message', function(event) {
-            if (!isSyncActive) return;
-            if (event.source !== window.opener) return;
+            if (!isSyncActive || event.source !== window.opener) return;
             if (!event.data || event.data.type !== 'AVIATOR_DATA_SYNC') return;
 
             const incoming = Array.isArray(event.data.payload)
                 ? event.data.payload.map(Number).filter(v => Number.isFinite(v) && v > 0)
                 : [];
-            if (incoming.length === 0) return;
 
-            // First snapshot: populate an empty Analyzer immediately instead of
-            // waiting for the next game round.
-            if (needsBaseline || !lastKnownPayload) {
-                if (globalData.length === 0) {
-                    lastKnownPayload = incoming.slice();
-                    needsBaseline = false;
-                    renderData(incoming.slice());
-                    return;
-                }
+            if (!incoming.length) {
+                lastKnownPayload = [];
+                return;
+            }
 
-                const initialNewItems = extractNewValues(incoming, globalData);
+            if (needsBaseline || lastKnownPayload === null) {
                 lastKnownPayload = incoming.slice();
                 needsBaseline = false;
-                if (initialNewItems.length > 0) {
-                    renderData(initialNewItems.concat(globalData));
+
+                if (globalData.length === 0) {
+                    renderData(incoming.slice());
+                } else {
+                    const additions = extractNewValues(incoming, globalData);
+                    if (additions.length) renderData(additions.concat(globalData));
                 }
                 return;
             }
 
-            const newItems = extractNewValues(incoming, lastKnownPayload);
+            const additions = extractNewValues(incoming, lastKnownPayload);
             lastKnownPayload = incoming.slice();
 
-            if (newItems.length > 0) {
-                renderData(newItems.concat(globalData));
-            }
+            if (additions.length) renderData(additions.concat(globalData));
         });
 
         renderData(globalData);
