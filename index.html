@@ -100,6 +100,17 @@
 
         /* Streak probability chart */
         .streak-chart-wrap { display:flex; flex-direction:column; flex:1; min-height:0; gap:4px; }
+        /* Streak chart expanded view */
+        #streakChartView.streak-chart-fullscreen {
+            display:flex !important; position:fixed; inset:0; z-index:99999;
+            width:100vw; height:100vh; padding:12px; margin:0;
+            background:#0d1117; overflow:hidden; box-sizing:border-box;
+        }
+        #streakChartView.streak-chart-fullscreen .streak-chart-wrap { width:100%; height:100%; }
+        #streakChartView.streak-chart-fullscreen .streak-chart-heading { font-size:13px; min-height:32px; }
+        #streakChartView.streak-chart-fullscreen .streak-chart-heading strong { font-size:15px; }
+        #streakChartView.streak-chart-fullscreen .streak-chart-canvas { min-height:0; }
+        #streakViewFullscreenBtn { white-space:nowrap; }
         .streak-chart-heading { display:flex; justify-content:space-between; align-items:center; gap:8px; color:#c9d1d9; font-size:10px; }
         .streak-chart-heading strong { color:#fff; font-size:11px; }
         .streak-chart-tools { display:flex; align-items:center; gap:5px; }
@@ -233,6 +244,7 @@
                         <button type="button" onclick="zoomStreakChart(0.7)" title="Zoom in X and Y">＋</button>
                         <button type="button" onclick="zoomStreakChart(1.4)" title="Zoom out X and Y">－</button>
                         <button type="button" onclick="resetStreakChartZoom()" title="Reset zoom">Reset</button>
+                        <button type="button" id="streakViewFullscreenBtn" onclick="toggleStreakChartFullscreen()" title="Toggle full screen">⛶ Full Screen</button>
                         <span id="streakChartStatus">Waiting for data</span>
                     </div>
                 </div>
@@ -768,7 +780,11 @@
             const oldTotal = streakChartAllLabels.length;
             const oldMaxStart = Math.max(1, oldTotal - streakWindowSize + 1);
             const wasAtNewest = streakCurrentStart >= oldMaxStart;
-            const events = getCompletedStreakEvents(globalData, streakThresholdValue);
+            // Use the same selected round scope as the history table (latest rounds first).
+            // globalData is stored newest-first, so slice(0, scope) selects the latest N rounds.
+            const selectedRoundScope = Number(document.getElementById('scopeSelect')?.value) || globalData.length;
+            const scopedRoundData = globalData.slice(0, Math.min(globalData.length, selectedRoundScope));
+            const events = getCompletedStreakEvents(scopedRoundData, streakThresholdValue);
             if (!streakHasZoomed) streakWindowSize = Math.max(1, Math.min(STREAK_DEFAULT_WINDOW_SIZE, events.length || 1));
             const built = buildStreakProbabilityDatasets(events);
             streakChartAllLabels = built.labels;
@@ -782,7 +798,7 @@
             const slider = document.getElementById('streakScroll');
             slider.min = 1; slider.max = maxStart; slider.value = streakCurrentStart;
             slider.disabled = events.length <= streakWindowSize;
-            document.getElementById('streakChartStatus').textContent = `${events.length} completed streak events`;
+            document.getElementById('streakChartStatus').textContent = `${events.length} completed streak events / Last ${scopedRoundData.length.toLocaleString()} rounds`;
             renderStreakChartWindow(streakCurrentStart);
         }
 
@@ -864,6 +880,28 @@
             slider.max = maxStart; slider.value = streakCurrentStart; slider.disabled = total <= streakWindowSize;
             document.getElementById('streakScrollLabel').textContent = total ? `${start + 1}–${end} / ${total}` : '0 events';
         }
+
+        function toggleStreakChartFullscreen(forceState) {
+            const view = document.getElementById('streakChartView');
+            const button = document.getElementById('streakViewFullscreenBtn');
+            if (!view || !button) return;
+            const shouldEnter = typeof forceState === 'boolean'
+                ? forceState
+                : !view.classList.contains('streak-chart-fullscreen');
+            view.classList.toggle('streak-chart-fullscreen', shouldEnter);
+            button.textContent = shouldEnter ? '✕ Exit Full Screen' : '⛶ Full Screen';
+            button.title = shouldEnter ? 'Exit full screen (Esc)' : 'Toggle full screen';
+            // Let the browser apply the new layout before resizing the Chart.js canvas.
+            requestAnimationFrame(() => {
+                if (streakProbabilityChart) streakProbabilityChart.resize();
+            });
+        }
+
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape' && document.getElementById('streakChartView')?.classList.contains('streak-chart-fullscreen')) {
+                toggleStreakChartFullscreen(false);
+            }
+        });
 
         function handleCSVUpload(event) {
             const file = event.target.files[0]; if (!file) return;
